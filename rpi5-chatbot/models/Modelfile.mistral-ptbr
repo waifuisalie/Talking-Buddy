@@ -1,0 +1,18 @@
+# Custom Mistral model configured for Brazilian Portuguese responses
+# Based on mistral with PT-BR system instruction
+#
+# To build this model, run:
+#   ollama create mistral-ptbr -f Modelfile.mistral-ptbr
+#
+# This creates a new model for reference/comparison on more powerful hardware.
+# Mistral is a 7B model and should only be used on devices with sufficient
+# resources (not recommended for Raspberry Pi 5).
+
+FROM mistral
+
+# System instruction to always respond in Brazilian Portuguese
+SYSTEM Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta. Seja claro, conciso e natural em suas respostas.
+
+# Keep optimal parameters for this model
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9

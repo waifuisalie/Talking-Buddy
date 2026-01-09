@@ -1,0 +1,17 @@
+# Custom Qwen2.5:1.5b model configured for Brazilian Portuguese responses
+# Based on qwen2.5:1.5b with PT-BR system instruction
+#
+# To build this model, run:
+#   ollama create qwen2.5-ptbr -f Modelfile.qwen2.5-ptbr
+#
+# This creates a new model that always responds in Portuguese,
+# even when given English input.
+
+FROM qwen2.5:1.5b
+
+# System instruction to always respond in Brazilian Portuguese
+SYSTEM Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta. Seja claro, conciso e natural em suas respostas.
+
+# Keep optimal parameters for this model
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9

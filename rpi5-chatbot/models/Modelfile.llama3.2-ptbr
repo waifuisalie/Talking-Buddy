@@ -1,0 +1,18 @@
+# Custom Llama3.2:1b model configured for Brazilian Portuguese responses
+# Based on llama3.2:1b with PT-BR system instruction
+#
+# To build this model, run:
+#   ollama create llama3.2-ptbr -f Modelfile.llama3.2-ptbr
+#
+# This creates a new model focused on maximum quality while maintaining
+# Brazilian Portuguese responses. Good choice when quality is prioritized
+# over speed on Raspberry Pi 5.
+
+FROM llama3.2:1b
+
+# System instruction to always respond in Brazilian Portuguese
+SYSTEM Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta. Seja claro, conciso e natural em suas respostas.
+
+# Keep optimal parameters for this model
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
