@@ -6,10 +6,9 @@ A fully local, battery-powered voice assistant using open-source AI technologies
 
 - 🎤 **Wake Word Detection** - "Marvin" activation using ESP32-S3 with TensorFlow Lite
 - 🇧🇷 **Full Brazilian Portuguese Support** - Speech recognition, language model, and text-to-speech all in PT-BR
-- 🔋 **Battery-Powered Operation** - Intelligent sleep states provide 85-92% power savings
+- 🔋 **Battery-Powered Operation** - Intelligent sleep states power savings
 - 🏠 **Fully Local** - Runs entirely offline on Raspberry Pi 5, no cloud dependencies
 - 🧩 **Modular Architecture** - Separate STT, LLM, and TTS components for easy customization
-- 💾 **Conversation Memory** - Automatic conversation history with context awareness
 
 ## Quick Start
 
@@ -20,7 +19,7 @@ For complete installation instructions, see [rpi5-chatbot/INSTALLATION.md](rpi5-
 ## Hardware Requirements
 
 ### Core Components
-- **Raspberry Pi 5** (4GB+ RAM recommended)
+- **Raspberry Pi 5** (8GB RAM recommended)
 - **ESP32-S3** with I2S microphone (for wake word detection)
 - **USB Microphone** (for conversation audio input)
 - **Audio Output** (3.5mm jack, HDMI, or I2S DAC)
@@ -95,8 +94,6 @@ The system uses intelligent two-tier sleep states:
 - **Light Sleep** (1s wake time) - Ollama model loaded, ready for conversation
 - **Deep Sleep** (5-10s wake time) - Ollama model unloaded for maximum power savings
 
-**Power Savings:** 85-92% reduction vs always-on listening
-
 ## Installation
 
 ### Prerequisites
@@ -139,21 +136,10 @@ For detailed step-by-step instructions, see [rpi5-chatbot/INSTALLATION.md](rpi5-
 - [Modelfile Guide](rpi5-chatbot/docs/MODELFILE_GUIDE.md) - Custom Ollama model configuration
 - [Wake Word Integration](rpi5-chatbot/docs/WAKE_WORD_INTEGRATION.md) - Architecture overview
 
-## Performance
-
-**On Raspberry Pi 5:**
-- **Response Time:** 2-3 seconds (with Gemma3 1B)
-- **Memory Usage:** 1-2 GB (model dependent)
-- **Wake Word Latency:** <500ms
-- **Power Consumption:** ~3-5W active, ~0.3-0.5W during wake word listening
-
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details
 
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Acknowledgments
 
@@ -172,4 +158,3 @@ For issues and questions:
 
 ---
 
-**Made with ❤️ for local, privacy-focused voice assistants**
