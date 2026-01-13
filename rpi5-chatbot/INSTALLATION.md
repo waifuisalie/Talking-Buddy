@@ -170,7 +170,7 @@ ollama run gemma3-ptbr "Hello, how are you?"
 
 ### 5.1 Navigate to Chatbot Directory
 ```bash
-cd ~/Documents/TCC_dos_guri/TCC-dos-guri/fucking_with_AI/chatbot
+cd ~/TalkingBuddy-Voice-Assistant/rpi5-chatbot
 ```
 
 ### 5.2 Activate Virtual Environment
@@ -202,22 +202,24 @@ cat config.py | grep -A 2 "whisper.cpp\|piper"
 ### 6.2 Update Paths (If Needed)
 
 The config.py expects these paths (which should now match):
-- Whisper model: `/home/waifuisalie/whisper.cpp/models/ggml-base.bin`
-- Whisper CLI: `/home/waifuisalie/whisper.cpp/build/bin/whisper-cli`
-- Piper binary: `/home/waifuisalie/piper/piper/piper`
+- Whisper model: `~/whisper.cpp/models/ggml-base.bin`
+- Whisper CLI: `~/whisper.cpp/build/bin/whisper-cli`
+- Piper binary: `~/piper/piper/piper`
 - Piper model: `pt_BR-faber-medium.onnx`
-- Piper model path: `/home/waifuisalie/piper/piper/`
+- Piper model path: `~/piper/piper/`
+
+**Note**: The config uses `os.path.expanduser("~")` to automatically expand the home directory, so paths work for any user.
 
 **If paths are different**, edit with:
 ```bash
 nvim config.py
 ```
 
-Update the following lines:
-- Line ~14: `model_path: str = "/home/waifuisalie/whisper.cpp/models/ggml-base.bin"`
-- Line ~15: `cli_binary: str = "/home/waifuisalie/whisper.cpp/build/bin/whisper-cli"`
-- Line ~66: `binary: str = "/home/waifuisalie/piper/piper/piper"`
-- Line ~68: `model_path: str = "/home/waifuisalie/piper/piper/"`
+Update the following lines with your custom paths:
+- Line ~14: `model_path: str = os.path.expanduser("~/whisper.cpp/models/ggml-base.bin")`
+- Line ~15: `cli_binary: str = os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli")`
+- Line ~66: `binary: str = os.path.expanduser("~/piper/piper/piper")`
+- Line ~68: `model_path: str = os.path.expanduser("~/piper/piper/")`
 
 ### 6.3 Create Conversation History Directory
 ```bash
