@@ -250,6 +250,11 @@ class VoiceChatbot:
         if self.state_manager.is_state("listening") and not self.is_processing:
             print(f"🗣️  User: {text}")
 
+            # IMPORTANT: Pause recording immediately to prevent queuing
+            # This prevents the mic from picking up speech during LLM processing
+            if self.whisper_stt:
+                self.whisper_stt.pause_recording()
+
             # Check for dismissal patterns
             if self.dismissal_detector.is_dismissal(text):
                 print("👋 Dismissal detected - will enter sleep after response")
