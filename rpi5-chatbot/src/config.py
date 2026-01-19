@@ -91,6 +91,15 @@ class ConversationConfig:
     max_history: int = 10  # Keep last 10 exchanges
     system_prompt: str = ""  # Empty for better results with small models
 
+    # Interaction mode: How the assistant handles multi-turn conversations
+    # - "single-shot": Wake word → One Q&A → Sleep (Alexa-style, best battery)
+    # - "conversation": Wake word → Continuous conversation → Manual dismissal/timeout (current behavior)
+    # - "smart": Single-shot by default, but continues if LLM asks a question (hybrid)
+    interaction_mode: str = "smart"
+
+    # For "smart" mode: How long to wait for follow-up after LLM asks a question
+    smart_mode_followup_timeout: float = 10.0  # seconds
+
 class ChatbotConfig:
     """Main configuration class for the voice chatbot - RPI5 Edition"""
 

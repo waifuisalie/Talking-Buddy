@@ -64,27 +64,33 @@ class TimeoutManager:
         """
         self._idle_callback = callback
 
-    def start_conversation_timer(self):
+    def start_conversation_timer(self, timeout: Optional[float] = None):
         """
         Start the conversation timeout timer
 
         Resets any existing conversation timer. Call this after each
         time the AI finishes speaking.
+
+        Args:
+            timeout: Optional custom timeout in seconds. If None, uses default conversation_timeout
         """
         with self._lock:
             # Cancel existing timer
             if self._conversation_timer:
                 self._conversation_timer.cancel()
 
+            # Use custom timeout if provided, otherwise use default
+            actual_timeout = timeout if timeout is not None else self.conversation_timeout
+
             # Start new timer
             self._conversation_timer = threading.Timer(
-                self.conversation_timeout,
+                actual_timeout,
                 self._on_conversation_timeout
             )
             self._conversation_timer.daemon = True
             self._conversation_timer.start()
 
-            print(f"⏰ Conversation timer started ({self.conversation_timeout}s)")
+            print(f"⏰ Conversation timer started ({actual_timeout}s)")
 
     def reset_conversation_timer(self):
         """

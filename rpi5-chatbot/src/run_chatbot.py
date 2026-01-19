@@ -21,12 +21,13 @@ import ollama_llm
 import piper_tts
 import esp32_wake_listener
 
-def create_custom_config(model_name=None, language_mode="native"):
+def create_custom_config(model_name=None, language_mode="native", interaction_mode="smart"):
     """Create a custom configuration if needed
 
     Args:
         model_name: Model name (e.g., "qwen2.5:1.5b", "gemma3:1b", "llama3.2:1b")
         language_mode: "native" for native Portuguese support, "pt-br" for forced Portuguese via Modelfile
+        interaction_mode: "single-shot", "conversation", or "smart" (default)
     """
     chatbot_config = config.ChatbotConfig.from_env()
 
@@ -65,6 +66,15 @@ def create_custom_config(model_name=None, language_mode="native"):
         chatbot_config.ollama.model = final_model
         print(f"📦 Model: {final_model}")
         print(f"🌐 Language Mode: {'Forced Portuguese (via Modelfile)' if language_mode == 'pt-br' else 'Native Portuguese'}")
+
+    # Apply interaction mode
+    chatbot_config.conversation.interaction_mode = interaction_mode
+    mode_descriptions = {
+        "single-shot": "Single-shot (Alexa-style, best battery)",
+        "conversation": "Continuous conversation (original behavior)",
+        "smart": "Smart hybrid (continues on questions)"
+    }
+    print(f"💬 Interaction Mode: {mode_descriptions.get(interaction_mode, interaction_mode)}")
 
     # You can customize the configuration here
     # For example:
@@ -114,6 +124,15 @@ def main():
         help="Initial chatbot state (default: light_sleep). Use 'listening' for always-on, 'deep_sleep' for minimal power"
     )
 
+    # Interaction mode arguments
+    parser.add_argument(
+        "--interaction-mode",
+        type=str,
+        choices=["single-shot", "conversation", "smart"],
+        default="smart",
+        help="Interaction mode (default: smart). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat, 'smart' for hybrid (continues if AI asks question)"
+    )
+
     # Operation arguments
     parser.add_argument("--test", action="store_true", help="Run system tests")
     parser.add_argument("--clear-history", action="store_true", help="Clear conversation history")
@@ -122,8 +141,8 @@ def main():
 
     args = parser.parse_args()
 
-    # Create configuration with model selection
-    chatbot_config = create_custom_config(args.model, args.language)
+    # Create configuration with model selection and interaction mode
+    chatbot_config = create_custom_config(args.model, args.language, args.interaction_mode)
 
     if args.test:
         print("🧪 Running system tests...")

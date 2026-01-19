@@ -334,11 +334,21 @@ class VoiceChatbot:
         finally:
             self.is_processing = False
 
+    def _response_invites_continuation(self, response_text: str) -> bool:
+        """
+        Check if the AI response invites continuation (asks a question)
+        Used for "smart" interaction mode
+
+        Simply checks if the response ends with a question mark
+        """
+        return response_text.strip().endswith('?')
+
     def _play_response(self, audio_file: str, response_text: str):
         """Play the AI response"""
         def on_start():
             self.state_manager.set_state("speaking")
-            # Pause recording to prevent acoustic feedback
+            # Note: Recording already paused in _on_transcription_received
+            # Double-pause is safe (idempotent)
             if self.whisper_stt:
                 self.whisper_stt.pause_recording()
 
@@ -351,13 +361,45 @@ class VoiceChatbot:
                 print("💤 Entering light sleep after goodbye")
                 self.is_dismissal_pending = False
                 self._enter_light_sleep()
-            else:
-                # Resume recording after speaking
+                return
+
+            # Handle different interaction modes
+            interaction_mode = self.config.conversation.interaction_mode
+
+            if interaction_mode == "single-shot":
+                # Always sleep after response (Alexa-style)
+                print("💤 Single-shot mode: Entering light sleep")
+                self._enter_light_sleep()
+
+            elif interaction_mode == "conversation":
+                # Always continue listening (original behavior)
                 if self.whisper_stt:
                     self.whisper_stt.resume_recording()
                 self.state_manager.set_state("listening")
-
                 # Start conversation timeout (30s)
+                self.timeout_manager.start_conversation_timer()
+
+            elif interaction_mode == "smart":
+                # Continue only if AI asks a question
+                if self._response_invites_continuation(response_text):
+                    print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
+                    if self.whisper_stt:
+                        self.whisper_stt.resume_recording()
+                    self.state_manager.set_state("listening")
+                    # Use shorter timeout for follow-ups
+                    self.timeout_manager.start_conversation_timer(
+                        timeout=self.config.conversation.smart_mode_followup_timeout
+                    )
+                else:
+                    print("💤 Smart mode: Response complete, entering light sleep")
+                    self._enter_light_sleep()
+
+            else:
+                # Unknown mode, default to conversation mode
+                print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
+                if self.whisper_stt:
+                    self.whisper_stt.resume_recording()
+                self.state_manager.set_state("listening")
                 self.timeout_manager.start_conversation_timer()
 
         print(f"🤖 Assistant: {response_text}")
