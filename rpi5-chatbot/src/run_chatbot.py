@@ -107,8 +107,8 @@ def main():
         "--wake-mode",
         type=str,
         choices=["serial", "keyboard", "disabled"],
-        default="keyboard",
-        help="Wake word mode (default: keyboard). 'serial' for ESP32, 'keyboard' for testing with 'w' key, 'disabled' for always-on"
+        default="serial",
+        help="Wake word mode (default: serial). 'serial' for ESP32, 'keyboard' for testing with 'w' key, 'disabled' for always-on"
     )
     parser.add_argument(
         "--serial-port",
