@@ -59,22 +59,36 @@ else
     echo "PT-BR TTS model already exists, skipping download..."
 fi
 
-# Phase 4: Ollama setup
+# Phase 4: Install Ollama
 echo ""
-echo "🧠 Phase 4: Setting up Ollama..."
-if ! systemctl is-active --quiet ollama 2>/dev/null; then
-    echo "Ollama service not running. Please install Ollama first:"
-    echo "  curl -fsSL https://ollama.com/install.sh | sh"
-    echo "Then run this script again."
-    exit 1
+echo "🧠 Phase 4: Installing Ollama..."
+if ! command -v ollama &> /dev/null; then
+    echo "Ollama not found, installing..."
+    curl -fsSL https://ollama.com/install.sh | sh
+    echo "Starting Ollama service..."
+    sudo systemctl enable ollama
+    sudo systemctl start ollama
+    sleep 3
+else
+    echo "Ollama already installed, checking service..."
+    if ! systemctl is-active --quiet ollama; then
+        echo "Starting Ollama service..."
+        sudo systemctl start ollama
+        sleep 3
+    else
+        echo "Ollama service already running"
+    fi
 fi
 
+# Phase 5: Ollama models
+echo ""
+echo "📥 Phase 5: Downloading Ollama models..."
 echo "Pulling base model (gemma3:1b)..."
 ollama pull gemma3:1b
 
-# Phase 5: Python environment
+# Phase 6: Python environment
 echo ""
-echo "🐍 Phase 5: Setting up Python environment..."
+echo "🐍 Phase 6: Setting up Python environment..."
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
@@ -86,15 +100,15 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Phase 6: Create custom model
+# Phase 7: Create custom model
 echo ""
-echo "🎯 Phase 6: Creating custom Portuguese model..."
+echo "🎯 Phase 7: Creating custom Portuguese model..."
 cd models/
 bash create_model.sh
 
-# Phase 7: Verify installation
+# Phase 8: Verify installation
 echo ""
-echo "✅ Phase 7: Verifying installation..."
+echo "✅ Phase 8: Verifying installation..."
 cd "$SCRIPT_DIR"
 python src/run_chatbot.py --test
 
