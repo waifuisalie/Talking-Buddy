@@ -42,10 +42,10 @@ echo ""
 echo "🔊 Phase 3: Installing Piper TTS..."
 cd ~
 if [ ! -d "piper" ]; then
-    wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_arm64.tar.gz
+    wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz
     mkdir -p ~/piper
-    tar -xzf piper_arm64.tar.gz -C ~/piper
-    rm piper_arm64.tar.gz
+    tar -xzf piper_linux_aarch64.tar.gz -C ~/piper
+    rm piper_linux_aarch64.tar.gz
 else
     echo "Piper already exists, skipping download..."
 fi
