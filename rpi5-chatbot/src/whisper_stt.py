@@ -39,9 +39,11 @@ import config
 class WhisperSTT:
     """Handles speech-to-text using whisper.cpp CLI with VAD - RPI5 Edition"""
 
-    def __init__(self, whisper_config: config.WhisperConfig, callback: Optional[Callable[[str], None]] = None):
+    def __init__(self, whisper_config: config.WhisperConfig, callback: Optional[Callable[[str], None]] = None,
+                 on_speech_detected: Optional[Callable[[], None]] = None):
         self.config = whisper_config
         self.callback = callback
+        self.on_speech_detected = on_speech_detected  # NEW: Callback when speech is detected
 
         # Audio recording
         self.audio = None
@@ -223,6 +225,12 @@ class WhisperSTT:
                         print("🗣️  Speech detected, recording...")
                         self.is_recording = True
                         self.audio_frames = []
+                        # Notify callback that speech started
+                        if self.on_speech_detected:
+                            try:
+                                self.on_speech_detected()
+                            except Exception as e:
+                                print(f"❌ Error in speech detection callback: {e}")
 
                     self.audio_frames.append(audio_data)
                     self.last_audio_time = time.time()

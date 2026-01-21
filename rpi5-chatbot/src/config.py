@@ -10,6 +10,7 @@ IMPORTANT: This config is specifically tuned for Raspberry Pi 5 with:
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import os
 
 @dataclass
@@ -100,6 +101,17 @@ class ConversationConfig:
     # For "smart" mode: How long to wait for follow-up after LLM asks a question
     smart_mode_followup_timeout: float = 10.0  # seconds
 
+@dataclass
+class GPIOConfig:
+    """GPIO pin configuration for LED feedback"""
+    enabled: bool = True  # Enable/disable LED feedback
+
+    # GPIO pin assignments (BCM numbering)
+    red_pin: int = 17      # Physical pin 11
+    green_pin: int = 27    # Physical pin 13
+    blue_pin: int = 22     # Physical pin 15
+    yellow_pin: Optional[int] = 23  # Physical pin 16 (None to use Red+Green)
+
 class ChatbotConfig:
     """Main configuration class for the voice chatbot - RPI5 Edition"""
 
@@ -109,6 +121,7 @@ class ChatbotConfig:
         self.piper = PiperConfig()
         self.audio = AudioConfig()
         self.conversation = ConversationConfig()
+        self.gpio = GPIOConfig()
 
     def validate(self):
         """Validate that all required files and services exist"""

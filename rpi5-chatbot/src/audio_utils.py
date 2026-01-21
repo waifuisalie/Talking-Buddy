@@ -45,6 +45,7 @@ class AudioPlayer:
         self.state = AudioState.IDLE
         self.current_file = None
         self.is_playing = False
+        self.is_looping = False  # Track loop playback
         self._playback_thread = None
         self._stop_event = threading.Event()
 
@@ -128,15 +129,91 @@ class AudioPlayer:
             self.state = AudioState.IDLE
             self.is_playing = False
 
-    def stop(self):
-        """Stop current playback"""
-        if self.is_playing:
+    def play_loop(self, audio_file: str, on_start: Optional[Callable] = None) -> bool:
+        """
+        Play an audio file in a continuous loop (non-blocking)
+        Use stop_loop() to stop the looping playback
+        """
+        try:
+            if not Path(audio_file).exists():
+                print(f"❌ Audio file not found: {audio_file}")
+                return False
+
+            # Stop any current playback
+            self.stop()
+
+            self.current_file = audio_file
+            self.state = AudioState.PLAYING
+            self.is_playing = True
+            self.is_looping = True
+
+            if on_start:
+                on_start()
+
+            print(f"🔊 Playing (loop): {Path(audio_file).name}")
+
+            # Start looping playback in background thread
+            self._playback_thread = threading.Thread(
+                target=self._play_loop_thread,
+                daemon=True
+            )
+            self._playback_thread.start()
+            return True
+
+        except Exception as e:
+            print(f"❌ Error playing loop audio: {e}")
+            self.state = AudioState.IDLE
+            self.is_playing = False
+            self.is_looping = False
+            return False
+
+    def _play_loop_thread(self):
+        """Background thread for looping playback"""
+        try:
+            pygame.mixer.music.load(self.current_file)
+            pygame.mixer.music.play(-1)  # -1 = loop indefinitely
+
+            # Wait until stop is requested
+            while self.is_looping and not self._stop_event.is_set():
+                time.sleep(0.1)
+
+            pygame.mixer.music.stop()
+
+        except Exception as e:
+            print(f"❌ Error in loop playback: {e}")
+        finally:
+            self.state = AudioState.IDLE
+            self.is_playing = False
+            self.is_looping = False
+
+    def stop_loop(self):
+        """Stop looping playback"""
+        if self.is_looping:
+            self.is_looping = False
             self._stop_event.set()
             pygame.mixer.music.stop()
 
-            # Wait for playback thread to finish
+            # Wait for playback thread to finish (but not if we're in that thread)
             if self._playback_thread and self._playback_thread.is_alive():
-                self._playback_thread.join(timeout=1.0)
+                if threading.current_thread() != self._playback_thread:
+                    self._playback_thread.join(timeout=1.0)
+
+            self.state = AudioState.IDLE
+            self.is_playing = False
+            self._stop_event.clear()
+            print("🛑 Loop playback stopped")
+
+    def stop(self):
+        """Stop current playback"""
+        if self.is_playing or self.is_looping:
+            self.is_looping = False
+            self._stop_event.set()
+            pygame.mixer.music.stop()
+
+            # Wait for playback thread to finish (but not if we're in that thread)
+            if self._playback_thread and self._playback_thread.is_alive():
+                if threading.current_thread() != self._playback_thread:
+                    self._playback_thread.join(timeout=1.0)
 
             self.state = AudioState.IDLE
             self.is_playing = False

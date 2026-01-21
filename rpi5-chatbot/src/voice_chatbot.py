@@ -34,6 +34,7 @@ import esp32_wake_listener
 import dismissal_detector
 import timeout_manager
 import sleep_manager
+import gpio_controller
 
 class VoiceChatbot:
     """Main voice chatbot system controller"""
@@ -50,6 +51,9 @@ class VoiceChatbot:
         self.piper_tts = None
         self.audio_player = None
         self.conversation_manager = None
+
+        # GPIO/LED controller
+        self.led_controller = None
 
         # State management
         self.state_manager = audio_utils.StateManager()
@@ -117,10 +121,25 @@ class VoiceChatbot:
             # Initialize audio player
             self.audio_player = audio_utils.AudioPlayer()
 
-            # Initialize STT with callback
+            # Initialize LED controller
+            if self.config.gpio.enabled:
+                try:
+                    self.led_controller = gpio_controller.LEDController(
+                        red_pin=self.config.gpio.red_pin,
+                        green_pin=self.config.gpio.green_pin,
+                        blue_pin=self.config.gpio.blue_pin,
+                        yellow_pin=self.config.gpio.yellow_pin
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to initialize LED controller: {e}")
+                    print("   (Continuing without LED feedback)")
+                    self.led_controller = None
+
+            # Initialize STT with callbacks
             self.whisper_stt = whisper_stt.WhisperSTT(
                 self.config.whisper,
-                callback=self._on_transcription_received
+                callback=self._on_transcription_received,
+                on_speech_detected=self._on_speech_activity_detected
             )
 
             # NOTE: SilenceDetector registration removed - whisper_stt.py handles VAD internally
@@ -199,6 +218,9 @@ class VoiceChatbot:
         """Stop the voice chatbot system"""
         print("\n🛑 Stopping Voice Chatbot...")
 
+        # Play shutdown tone (blocking)
+        self._play_feedback_audio("shutdown", blocking=True)
+
         self.is_running = False
 
         # Stop all timers
@@ -214,6 +236,10 @@ class VoiceChatbot:
 
         if self.audio_player:
             self.audio_player.stop()
+
+        # Cleanup LED controller
+        if self.led_controller:
+            self.led_controller.cleanup()
 
         # Wake from deep sleep if needed (so Ollama is available for next run)
         if self.state_manager.is_state("deep_sleep"):
@@ -250,6 +276,9 @@ class VoiceChatbot:
         if self.state_manager.is_state("listening") and not self.is_processing:
             print(f"🗣️  User: {text}")
 
+            # Play processing beep (non-blocking)
+            self._play_feedback_audio("processing", blocking=False)
+
             # IMPORTANT: Pause recording immediately to prevent queuing
             # This prevents the mic from picking up speech during LLM processing
             if self.whisper_stt:
@@ -273,6 +302,19 @@ class VoiceChatbot:
                 # Reset conversation timer since user is talking
                 self.timeout_manager.reset_conversation_timer()
                 self.response_queue.put(text.strip())
+
+    def _on_speech_activity_detected(self):
+        """
+        Callback when speech is detected (user started talking)
+
+        This is called as soon as speech is detected, before transcription.
+        It resets the conversation timer to prevent timeout while user is actively speaking.
+        """
+        # Only reset timer if we're in listening state with an active conversation timer
+        if self.state_manager.is_state("listening") and self.timeout_manager.is_conversation_timer_active():
+            self.timeout_manager.reset_conversation_timer()
+            # Restart the timer to give user full 30s from when they started speaking
+            self.timeout_manager.start_conversation_timer()
 
     def _on_silence_detected(self, silence_duration: float):
         """Callback when silence is detected - NO LONGER USED with new whisper_stt"""
@@ -418,23 +460,36 @@ class VoiceChatbot:
 
     def _on_listening_state(self, old_state: str, new_state: str, data: dict):
         """Handler for listening state"""
+        if self.led_controller:
+            self.led_controller.set_state("listening")
         # Note: "Listening for speech..." is printed by whisper_stt, not here
-        pass
 
     def _on_processing_state(self, old_state: str, new_state: str, data: dict):
         """Handler for processing state"""
+        if self.led_controller:
+            self.led_controller.set_state("processing")
         print("💭 Processing your request...")
 
     def _on_speaking_state(self, old_state: str, new_state: str, data: dict):
         """Handler for speaking state"""
+        if self.led_controller:
+            self.led_controller.set_state("speaking")
         print("🔊 Playing response...")
 
     def _on_light_sleep_state(self, old_state: str, new_state: str, data: dict):
         """Handler for light sleep state"""
+        if self.led_controller:
+            self.led_controller.set_state("light_sleep")
+        # Only play ready beep when transitioning from active states
+        if old_state in ["listening", "processing", "speaking"]:
+            self._play_feedback_audio("ready", blocking=False)
         print("💤 Light sleep - Waiting for wake word...")
 
     def _on_deep_sleep_state(self, old_state: str, new_state: str, data: dict):
         """Handler for deep sleep state"""
+        if self.led_controller:
+            self.led_controller.set_state("deep_sleep")
+        self._play_feedback_audio("deep_sleep", blocking=False)
         print("😴 Deep sleep - Ollama stopped, minimal power...")
 
     def _on_wake_word_detected(self):
@@ -448,15 +503,26 @@ class VoiceChatbot:
 
         print("🌅 Wake word detected!")
 
+        # Play wake beep
+        self._play_feedback_audio("wake", blocking=False)
+
         # Stop idle timer (if in light sleep)
         self.timeout_manager.reset_idle_timer()
 
         # Wake from deep sleep if needed
         if self.state_manager.is_state("deep_sleep"):
             print("🔄 Waking from deep sleep...")
+            time.sleep(0.3)  # Brief pause after wake beep
+            # Start loading tone loop
+            self._start_loading_audio()
+            # Wake Ollama
             if not self.sleep_manager.wake_from_deep_sleep(self.config.ollama.model):
+                self._stop_loading_audio()
                 print("❌ Failed to wake from deep sleep")
                 return
+            # Stop loading tone and play ready beep
+            self._stop_loading_audio()
+            self._play_feedback_audio("ready", blocking=False)
 
         # Start whisper STT only if not already running
         if not self.whisper_stt.is_running:
@@ -548,6 +614,48 @@ class VoiceChatbot:
             if audio_file:
                 self.audio_player.play(audio_file, blocking=True)
                 Path(audio_file).unlink(missing_ok=True)
+
+    def _play_feedback_audio(self, audio_type: str, blocking: bool = False):
+        """
+        Play audio feedback for state transitions
+
+        Args:
+            audio_type: 'wake', 'processing', 'ready', 'deep_sleep', 'shutdown'
+            blocking: If True, wait for audio to finish playing
+        """
+        if not self.audio_player:
+            return
+
+        sounds_dir = Path(__file__).parent.parent / "sounds"
+
+        audio_map = {
+            "wake": "wake_beep.wav",
+            "processing": "processing_beep.wav",
+            "ready": "ready_beep.wav",
+            "deep_sleep": "deep_sleep_tone.wav",
+            "shutdown": "shutdown_tone.wav"
+        }
+
+        if audio_type in audio_map:
+            audio_file = sounds_dir / audio_map[audio_type]
+            if audio_file.exists():
+                # Shutdown always blocks
+                is_blocking = blocking or (audio_type == "shutdown")
+                self.audio_player.play(str(audio_file), blocking=is_blocking)
+
+    def _start_loading_audio(self):
+        """Start playing loading tone in a loop"""
+        if not self.audio_player:
+            return
+        sounds_dir = Path(__file__).parent.parent / "sounds"
+        loading_file = sounds_dir / "loading_tone.wav"
+        if loading_file.exists():
+            self.audio_player.play_loop(str(loading_file))
+
+    def _stop_loading_audio(self):
+        """Stop playing loading tone"""
+        if self.audio_player:
+            self.audio_player.stop_loop()
 
 def main():
     """Main entry point"""
