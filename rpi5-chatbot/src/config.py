@@ -30,7 +30,7 @@ class WhisperConfig:
     # ALSA device configuration - STABLE across reboots
     # Use ALSA device name instead of card index for reliability
     capture_device_name: str = "plughw:CARD=Device,DEV=0"  # USB PnP Sound Device (microphone)
-    capture_device: int = -1  # Will be auto-detected from device_name, -1 = use name directly
+    capture_device: int = 1  # PyAudio device index (1 = USB PnP Sound Device: Audio (hw:3,0))
 
     # VAD (Voice Activity Detection) settings
     # Adjust silence_threshold based on debug output (🔊 RMS values):
