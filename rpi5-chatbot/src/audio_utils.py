@@ -11,6 +11,7 @@ import pygame
 import time
 import threading
 import os
+import queue
 from pathlib import Path
 from enum import Enum
 from typing import Optional, Callable
@@ -48,6 +49,16 @@ class AudioPlayer:
         self.is_looping = False  # Track loop playback
         self._playback_thread = None
         self._stop_event = threading.Event()
+
+        # Queue-based playback system (NEW for streaming)
+        self.playback_queue = queue.Queue()
+        self.queue_thread = None
+        self.is_queue_active = False
+        self.generation_complete = False  # Flag to signal when generation is done
+        self.enqueued_count = 0  # Track total items enqueued
+        self.played_count = 0  # Track total items played
+        self.on_chunk_start = None  # Callback when a chunk starts playing
+        self.on_queue_complete = None  # Callback when queue finishes
 
     def play(self, audio_file: str, blocking: bool = True,
              on_start: Optional[Callable] = None,
@@ -219,6 +230,169 @@ class AudioPlayer:
             self.is_playing = False
             self._stop_event.clear()
             print("🛑 Audio playback stopped")
+
+    # Queue-based playback methods (NEW for streaming)
+
+    def enqueue_audio(self, audio_file: str, metadata: dict = None):
+        """
+        Add an audio file to the playback queue (non-blocking)
+
+        Args:
+            audio_file: Path to the audio file
+            metadata: Optional metadata dict (e.g., {"text": "...", "cleanup": True})
+        """
+        if metadata is None:
+            metadata = {}
+
+        self.playback_queue.put({
+            "file": audio_file,
+            "metadata": metadata
+        })
+        self.enqueued_count += 1
+
+    def start_queue_playback(self):
+        """Start background thread to process queue"""
+        # Always reset counters and flags for new session (even if queue already active)
+        self.generation_complete = False
+        self.enqueued_count = 0
+        self.played_count = 0
+
+        if not self.is_queue_active:
+            self.is_queue_active = True
+            self.queue_thread = threading.Thread(
+                target=self._queue_processor_thread,
+                daemon=True,
+                name="AudioQueueProcessor"
+            )
+            self.queue_thread.start()
+            print("🎵 Audio queue playback started")
+        else:
+            print("ℹ️  Queue already active, counters reset for new session")
+
+    def stop_queue_playback(self, clear_queue: bool = True):
+        """
+        Stop queue playback and cleanup
+
+        Args:
+            clear_queue: If True, clear all queued items
+        """
+        if self.is_queue_active:
+            self.is_queue_active = False
+
+            # Clear queue if requested
+            if clear_queue:
+                while not self.playback_queue.empty():
+                    try:
+                        item = self.playback_queue.get_nowait()
+                        # Cleanup temp file if needed
+                        if item["metadata"].get("cleanup", False):
+                            try:
+                                Path(item["file"]).unlink(missing_ok=True)
+                            except Exception as e:
+                                print(f"❌ Error cleaning up queued file: {e}")
+                    except queue.Empty:
+                        break
+
+            # Stop current playback
+            self.stop()
+
+            # Wait for queue thread to finish
+            if self.queue_thread and self.queue_thread.is_alive():
+                if threading.current_thread() != self.queue_thread:
+                    self.queue_thread.join(timeout=2.0)
+
+            print("🛑 Audio queue playback stopped")
+
+    def signal_generation_complete(self):
+        """
+        Signal that generation/streaming is complete.
+        This allows the queue processor to trigger on_queue_complete callback
+        once all queued audio has finished playing.
+        """
+        self.generation_complete = True
+
+    def _queue_processor_thread(self):
+        """Background worker that plays files sequentially from queue"""
+        try:
+            while self.is_queue_active:
+                try:
+                    # Get next item from queue (with timeout to check is_queue_active)
+                    item = self.playback_queue.get(timeout=0.5)
+
+                    audio_file = item["file"]
+                    metadata = item["metadata"]
+
+                    if not Path(audio_file).exists():
+                        print(f"❌ Queued audio file not found: {audio_file}")
+                        continue
+
+                    # Call on_chunk_start callback if provided
+                    if self.on_chunk_start:
+                        try:
+                            self.on_chunk_start(metadata)
+                        except Exception as e:
+                            print(f"❌ Error in on_chunk_start callback: {e}")
+
+                    # Play audio using blocking mode to avoid gaps
+                    self.current_file = audio_file
+                    self.state = AudioState.PLAYING
+                    self.is_playing = True
+
+                    # Use _play_blocking to play sequentially
+                    self._play_blocking(on_finish=None)
+
+                    # Increment played counter
+                    self.played_count += 1
+
+                    # Cleanup temp file if requested
+                    if metadata.get("cleanup", False):
+                        try:
+                            Path(audio_file).unlink(missing_ok=True)
+                        except Exception as e:
+                            print(f"❌ Error cleaning up audio file: {e}")
+
+                except queue.Empty:
+                    # No items in queue, check if we should call on_queue_complete
+                    # Only trigger callback when ALL conditions are met:
+                    # 1. Generation is complete (no more items will be enqueued)
+                    # 2. All enqueued items have been played
+                    # 3. Queue is empty (final verification)
+                    if (self.is_queue_active and
+                        self.generation_complete and
+                        self.played_count >= self.enqueued_count and
+                        self.playback_queue.empty()):
+
+                        # Give a brief grace period for final verification
+                        time.sleep(0.2)
+                        # Double-check conditions after grace period
+                        if (self.played_count >= self.enqueued_count and
+                            self.playback_queue.empty() and
+                            self.on_queue_complete):
+                            try:
+                                print(f"🎵 Queue complete: played {self.played_count}/{self.enqueued_count} items")
+                                self.on_queue_complete()
+                            except Exception as e:
+                                print(f"❌ Error in on_queue_complete callback: {e}")
+                            # Reset callback to avoid multiple calls
+                            self.on_queue_complete = None
+                    continue
+
+                except Exception as e:
+                    print(f"❌ Error processing queue item: {e}")
+
+        finally:
+            self.is_queue_active = False
+            self.state = AudioState.IDLE
+            self.is_playing = False
+            print("✅ Queue processor thread exited")
+
+    def is_queue_empty(self) -> bool:
+        """Check if playback queue is empty"""
+        return self.playback_queue.empty()
+
+    def get_queue_size(self) -> int:
+        """Get number of items in playback queue"""
+        return self.playback_queue.qsize()
 
     def pause(self):
         """Pause current playback"""

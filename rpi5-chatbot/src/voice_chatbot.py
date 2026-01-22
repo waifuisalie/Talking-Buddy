@@ -36,6 +36,176 @@ import timeout_manager
 import sleep_manager
 import gpio_controller
 
+class SentenceDetector:
+    """Detects sentence boundaries from streaming text chunks"""
+
+    def __init__(self, min_length: int = 30):
+        """
+        Initialize sentence detector
+
+        Args:
+            min_length: Minimum characters for a valid sentence (default: 30)
+        """
+        self.buffer = ""
+        self.sentence_endings = ('.', '!', '?', ':', ';')
+        self.min_sentence_length = min_length
+        self.paragraph_break = '\n\n'  # Double newline indicates paragraph break
+
+    def add_chunk(self, chunk: str):
+        """
+        Add a text chunk and return completed sentences
+
+        Args:
+            chunk: Text chunk from streaming LLM
+
+        Returns:
+            List of complete sentences (may be empty)
+        """
+        # Accumulate to buffer
+        self.buffer += chunk
+        sentences = []
+
+        # Debug: Show buffer size periodically
+        if len(self.buffer) > 500 and len(self.buffer) % 100 < 10:
+            print(f"⚠️  Sentence buffer growing: {len(self.buffer)} chars, preview: {self.buffer[:100]}...")
+
+        # Find sentence boundaries
+        while True:
+            # Look for sentence ending characters
+            earliest_pos = -1
+            for ending in self.sentence_endings:
+                pos = self.buffer.find(ending)
+                if pos != -1:
+                    if earliest_pos == -1 or pos < earliest_pos:
+                        earliest_pos = pos
+
+            # No sentence ending found
+            if earliest_pos == -1:
+                break
+
+            # Extract potential sentence (include the ending character)
+            potential_sentence = self.buffer[:earliest_pos + 1].strip()
+
+            # Check if it meets minimum length
+            if len(potential_sentence) >= self.min_sentence_length:
+                sentences.append(potential_sentence)
+                # Remove sentence from buffer
+                self.buffer = self.buffer[earliest_pos + 1:].strip()
+            else:
+                # Too short, look for next ending after this one
+                # Keep this ending in buffer and look for the next one
+                if earliest_pos + 1 < len(self.buffer):
+                    # Look for next ending
+                    next_earliest = -1
+                    for ending in self.sentence_endings:
+                        pos = self.buffer.find(ending, earliest_pos + 1)
+                        if pos != -1:
+                            if next_earliest == -1 or pos < next_earliest:
+                                next_earliest = pos
+
+                    if next_earliest != -1:
+                        # Found another ending, try combining
+                        potential_sentence = self.buffer[:next_earliest + 1].strip()
+                        if len(potential_sentence) >= self.min_sentence_length:
+                            sentences.append(potential_sentence)
+                            self.buffer = self.buffer[next_earliest + 1:].strip()
+                        else:
+                            # Still too short, break and wait for more chunks
+                            break
+                    else:
+                        # No more endings, break and wait for more chunks
+                        break
+                else:
+                    # At end of buffer, break and wait for more chunks
+                    break
+
+        return sentences
+
+    def flush(self):
+        """
+        Return remaining buffer as final sentence
+
+        Returns:
+            Remaining text as final sentence, or None if buffer is empty
+        """
+        if self.buffer.strip():
+            final_sentence = self.buffer.strip()
+            self.buffer = ""
+            return final_sentence
+        return None
+
+class StreamingTTSProcessor:
+    """Processes streaming LLM chunks into TTS audio queue"""
+
+    def __init__(self, piper_tts, audio_player, min_sentence_length: int = 30):
+        """
+        Initialize streaming TTS processor
+
+        Args:
+            piper_tts: PiperTTS instance for synthesis
+            audio_player: AudioPlayer instance with queue support
+            min_sentence_length: Minimum characters for sentence detection
+        """
+        self.piper_tts = piper_tts
+        self.audio_player = audio_player
+        self.sentence_detector = SentenceDetector(min_sentence_length)
+        self.full_response = ""
+
+    def process_chunk(self, chunk: str):
+        """
+        Process a text chunk and synthesize completed sentences
+
+        Args:
+            chunk: Text chunk from streaming LLM
+        """
+        # Add chunk to full response for history tracking
+        self.full_response += chunk
+
+        # Detect completed sentences
+        sentences = self.sentence_detector.add_chunk(chunk)
+
+        # Synthesize each completed sentence
+        for sentence in sentences:
+            print(f"🎙️ Synthesizing sentence ({len(sentence)} chars): {sentence[:80]}...")
+            try:
+                audio_file = self.piper_tts.synthesize_to_temp(sentence)
+                if audio_file:
+                    metadata = {
+                        "text": sentence,
+                        "cleanup": True
+                    }
+                    self.audio_player.enqueue_audio(audio_file, metadata)
+                    print(f"✅ Enqueued audio for sentence")
+                else:
+                    print(f"⚠️  Failed to synthesize sentence: {sentence[:50]}...")
+            except Exception as e:
+                print(f"❌ Error synthesizing sentence: {e}")
+
+    def finalize(self):
+        """Synthesize any remaining text in buffer"""
+        final_sentence = self.sentence_detector.flush()
+        if final_sentence:
+            print(f"🎙️ Finalizing: synthesizing remaining buffer ({len(final_sentence)} chars): {final_sentence[:80]}...")
+            try:
+                audio_file = self.piper_tts.synthesize_to_temp(final_sentence)
+                if audio_file:
+                    metadata = {
+                        "text": final_sentence,
+                        "cleanup": True
+                    }
+                    self.audio_player.enqueue_audio(audio_file, metadata)
+                    print(f"✅ Enqueued final audio")
+                else:
+                    print(f"⚠️  Failed to synthesize final sentence: {final_sentence[:50]}...")
+            except Exception as e:
+                print(f"❌ Error synthesizing final sentence: {e}")
+        else:
+            print("ℹ️  No remaining text in buffer to finalize")
+
+    def get_full_response(self) -> str:
+        """Get the complete accumulated response text"""
+        return self.full_response
+
 class VoiceChatbot:
     """Main voice chatbot system controller"""
 
@@ -338,7 +508,14 @@ class VoiceChatbot:
                 print(f"❌ Error in response processor: {e}")
 
     def _handle_user_input(self, user_input: str):
-        """Handle a complete user input"""
+        """Handle user input - routes to streaming or blocking mode"""
+        if self.config.conversation.use_streaming:
+            self._handle_user_input_streaming(user_input)
+        else:
+            self._handle_user_input_blocking(user_input)
+
+    def _handle_user_input_blocking(self, user_input: str):
+        """Handle user input with blocking LLM and TTS (original implementation)"""
         try:
             self.is_processing = True
             self.state_manager.set_state("processing")
@@ -375,6 +552,154 @@ class VoiceChatbot:
             self.state_manager.set_state("listening")
         finally:
             self.is_processing = False
+
+    def _handle_user_input_streaming(self, user_input: str):
+        """Handle user input with streaming LLM and incremental TTS"""
+        try:
+            self.is_processing = True
+            self.state_manager.set_state("processing")
+
+            # Add user message to history
+            self.conversation_manager.add_user_message(user_input)
+
+            # Initialize streaming components
+            tts_processor = StreamingTTSProcessor(
+                self.piper_tts,
+                self.audio_player,
+                min_sentence_length=self.config.conversation.min_sentence_length
+            )
+
+            first_audio_played = False
+            queue_finished = False  # Flag to track when queue completes
+
+            # Setup audio queue callbacks
+            def on_first_chunk_start(metadata):
+                nonlocal first_audio_played
+                if not first_audio_played:
+                    first_audio_played = True
+                    self.state_manager.set_state("speaking")
+                    if self.whisper_stt:
+                        self.whisper_stt.pause_recording()
+                    print(f"🔊 Playing response (streaming)...")
+
+            def on_queue_complete():
+                # Just set a flag - don't do state transitions in callback thread
+                nonlocal queue_finished
+                queue_finished = True
+                print("✅ Audio queue playback finished")
+
+            # Start audio queue playback (this resets counters)
+            self.audio_player.start_queue_playback()
+
+            # Set callbacks AFTER starting queue to ensure clean state
+            self.audio_player.on_chunk_start = on_first_chunk_start
+            self.audio_player.on_queue_complete = on_queue_complete
+
+            # Stream LLM response
+            print("🤖 Generating response (streaming)...")
+            chunks_received = 0
+            for chunk in self.ollama_llm.generate_streaming_response(
+                user_input,
+                self.config.conversation.system_prompt
+            ):
+                tts_processor.process_chunk(chunk)
+                chunks_received += 1
+
+            # Finalize any remaining text
+            tts_processor.finalize()
+
+            # Get full response for display
+            full_response = tts_processor.get_full_response()
+            print(f"📊 Streaming stats: {chunks_received} chunks, {len(full_response)} characters")
+            print(f"🤖 Assistant: {full_response}")
+
+            # Only signal generation complete if we actually received chunks
+            if chunks_received > 0:
+                self.audio_player.signal_generation_complete()
+
+                # Wait for queue to finish playing (callback sets queue_finished flag)
+                # Timeout after 60 seconds to prevent infinite waiting
+                wait_start = time.time()
+                while not queue_finished and time.time() - wait_start < 60:
+                    time.sleep(0.1)
+
+                if not queue_finished:
+                    print("⚠️  Timeout waiting for audio queue to finish")
+
+                # Add complete response to history
+                if full_response.strip():
+                    self.conversation_manager.add_assistant_message(full_response)
+
+                # Handle interaction mode logic (in main thread context)
+                self._handle_streaming_complete(full_response)
+
+            else:
+                # No chunks received - likely an error
+                print("⚠️  No response chunks received from LLM")
+                self.audio_player.stop_queue_playback(clear_queue=True)
+                self.state_manager.set_state("listening")
+                if self.whisper_stt:
+                    self.whisper_stt.resume_recording()
+                return
+
+            # Trigger callback
+            if self.on_ai_response:
+                self.on_ai_response(full_response)
+
+        except Exception as e:
+            print(f"❌ Error in streaming handler: {e}")
+            self.audio_player.stop_queue_playback()
+            self.state_manager.set_state("listening")
+        finally:
+            self.is_processing = False
+
+    def _handle_streaming_complete(self, response_text: str):
+        """Handle post-streaming logic (interaction modes)"""
+        # Check if dismissal was detected
+        if self.is_dismissal_pending:
+            print("💤 Entering light sleep after goodbye")
+            self.is_dismissal_pending = False
+            self._enter_light_sleep()
+            return
+
+        # Handle different interaction modes
+        interaction_mode = self.config.conversation.interaction_mode
+
+        if interaction_mode == "single-shot":
+            # Always sleep after response (Alexa-style)
+            print("💤 Single-shot mode: Entering light sleep")
+            self._enter_light_sleep()
+
+        elif interaction_mode == "conversation":
+            # Always continue listening (original behavior)
+            if self.whisper_stt:
+                self.whisper_stt.resume_recording()
+            self.state_manager.set_state("listening")
+            # Start conversation timeout (30s)
+            self.timeout_manager.start_conversation_timer()
+
+        elif interaction_mode == "smart":
+            # Continue only if AI asks a question
+            if self._response_invites_continuation(response_text):
+                print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
+                if self.whisper_stt:
+                    self.whisper_stt.resume_recording()
+                self.state_manager.set_state("listening")
+                # Use shorter timeout for follow-ups
+                self.timeout_manager.start_conversation_timer(
+                    timeout=self.config.conversation.smart_mode_followup_timeout
+                )
+            else:
+                print("💤 Smart mode: Response complete, entering light sleep")
+                self._enter_light_sleep()
+
+        else:
+            # Unknown mode, default to conversation mode
+            print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
+            if self.whisper_stt:
+                self.whisper_stt.resume_recording()
+            self.state_manager.set_state("listening")
+            self.timeout_manager.start_conversation_timer()
 
     def _response_invites_continuation(self, response_text: str) -> bool:
         """

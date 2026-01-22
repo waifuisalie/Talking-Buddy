@@ -48,7 +48,7 @@ class OllamaConfig:
     url: str = "http://localhost:11434/api/chat"  # Using /chat endpoint for proper message handling
     model: str = "gemma3-ptbr"  # Default: gemma3 with forced Portuguese (fastest for RPi5)
     temperature: float = 0.7
-    max_tokens: int = 250
+    max_tokens: int = 800  # Increased from 250 to allow longer responses
     timeout: int = 30
 
     # Available 1B models (recommended for Raspberry Pi 5):
@@ -100,6 +100,10 @@ class ConversationConfig:
 
     # For "smart" mode: How long to wait for follow-up after LLM asks a question
     smart_mode_followup_timeout: float = 10.0  # seconds
+
+    # Streaming configuration (NEW)
+    use_streaming: bool = True  # Enable streaming LLM + incremental TTS (default: enabled)
+    min_sentence_length: int = 30  # Minimum characters for sentence detection (balanced)
 
 @dataclass
 class GPIOConfig:
