@@ -40,10 +40,12 @@ class WhisperSTT:
     """Handles speech-to-text using whisper.cpp CLI with VAD - RPI5 Edition"""
 
     def __init__(self, whisper_config: config.WhisperConfig, callback: Optional[Callable[[str], None]] = None,
-                 on_speech_detected: Optional[Callable[[], None]] = None):
+                 on_speech_detected: Optional[Callable[[], None]] = None,
+                 device_detector: Optional['audio_device_detector.AudioDeviceDetector'] = None):
         self.config = whisper_config
         self.callback = callback
         self.on_speech_detected = on_speech_detected  # NEW: Callback when speech is detected
+        self.device_detector = device_detector  # NEW: Audio device detector for auto-detection
 
         # Audio recording
         self.audio = None
@@ -71,21 +73,41 @@ class WhisperSTT:
         self.processing_lock = threading.Lock()
 
     def _find_device_index_by_name(self, device_name: str) -> Optional[int]:
-        """Find PyAudio device index by ALSA device name"""
+        """Find PyAudio device index by ALSA device name (fallback method)"""
         if not self.audio:
             return None
 
         try:
-            # Search for device by name pattern
+            # Search for device by name pattern (case-insensitive)
             device_count = self.audio.get_device_count()
+            device_name_lower = device_name.lower()
+
             for i in range(device_count):
                 info = self.audio.get_device_info_by_index(i)
                 # Check if device supports input
                 if info['maxInputChannels'] > 0:
-                    # Match by name (e.g., "USB" in device_name matches "USB PnP Sound Device")
-                    if 'USB' in device_name and 'USB' in info['name']:
+                    info_name_lower = info['name'].lower()
+
+                    # Try multiple matching strategies
+                    # 1. Exact substring match
+                    if device_name_lower in info_name_lower:
+                        print(f"🎤 Found matching device: {info['name']} (index {i})")
+                        return i
+
+                    # 2. USB pattern match
+                    if 'usb' in device_name_lower and 'usb' in info_name_lower:
                         print(f"🎤 Found USB microphone: {info['name']} (index {i})")
                         return i
+
+                    # 3. Card name extraction from ALSA name
+                    # e.g., "plughw:CARD=Device,DEV=0" -> look for "Device" in name
+                    import re
+                    card_match = re.search(r'CARD=([^,]+)', device_name)
+                    if card_match:
+                        card_name = card_match.group(1).lower()
+                        if card_name in info_name_lower:
+                            print(f"🎤 Found device by card name: {info['name']} (index {i})")
+                            return i
 
             print(f"⚠️  Could not find device matching '{device_name}', using default")
             return None
@@ -101,22 +123,34 @@ class WhisperSTT:
             return False
 
         try:
-            # Set ALSA environment variable for device selection
-            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
-                os.environ['AUDIODEV'] = self.config.capture_device_name
-
             # Suppress ALSA warnings (cosmetic only, doesn't affect functionality)
             from contextlib import redirect_stderr
             with open(os.devnull, 'w') as devnull:
                 with redirect_stderr(devnull):
                     self.audio = pyaudio.PyAudio()
 
-            # Try to find device by name if configured
+            # Auto-detect input device if enabled
             device_index = None
-            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+            if self.config.auto_detect_input and self.device_detector:
+                detected = self.device_detector.detect_input_device(
+                    user_preference=self.config.input_device_preference,
+                    config_preference=self.config.capture_device_name
+                )
+                if detected:
+                    device_index = detected.index
+                    if detected.alsa_name:
+                        os.environ['AUDIODEV'] = detected.alsa_name
+                    print(f"🎤 Input: {detected.name} (auto-detected)")
+                else:
+                    print("⚠️  Auto-detection failed, using fallback")
+
+            # Fallback: Try to find device by name if configured
+            if device_index is None and hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                # Set ALSA environment variable
+                os.environ['AUDIODEV'] = self.config.capture_device_name
                 device_index = self._find_device_index_by_name(self.config.capture_device_name)
 
-            # Fallback to config.capture_device if name search failed
+            # Final fallback to config.capture_device index
             if device_index is None and self.config.capture_device >= 0:
                 device_index = self.config.capture_device
 

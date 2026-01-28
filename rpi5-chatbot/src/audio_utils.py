@@ -31,15 +31,36 @@ class AudioState(Enum):
 class AudioPlayer:
     """Handles audio playback with state management - RPI5 Edition"""
 
-    def __init__(self, audio_config: Optional[config.AudioConfig] = None):
+    def __init__(self, audio_config: Optional[config.AudioConfig] = None,
+                 device_detector: Optional['audio_device_detector.AudioDeviceDetector'] = None):
         # Use provided config or default
         self.audio_config = audio_config or AUDIO_CONFIG
+        self.device_detector = device_detector
 
-        # Set SDL environment variables for ALSA device selection
-        if self.audio_config and hasattr(self.audio_config, 'playback_device_name'):
-            os.environ['SDL_AUDIODRIVER'] = 'alsa'
-            os.environ['AUDIODEV'] = self.audio_config.playback_device_name
-            print(f"🔊 Audio output: {self.audio_config.playback_device_name}")
+        # Auto-detect output device if enabled
+        if self.audio_config and self.audio_config.auto_detect_output and self.device_detector:
+            detected = self.device_detector.detect_output_device(
+                user_preference=self.audio_config.output_device_preference,
+                config_preference=self.audio_config.playback_device_name
+            )
+            if detected:
+                output_device = detected.alsa_name or detected.name
+                os.environ['SDL_AUDIODRIVER'] = 'alsa'
+                os.environ['AUDIODEV'] = output_device
+                print(f"🔊 Output: {detected.name} (auto-detected)")
+            else:
+                print("⚠️  No output device detected, using config fallback")
+                # Fall back to config device
+                if hasattr(self.audio_config, 'playback_device_name'):
+                    os.environ['SDL_AUDIODRIVER'] = 'alsa'
+                    os.environ['AUDIODEV'] = self.audio_config.playback_device_name
+                    print(f"🔊 Audio output: {self.audio_config.playback_device_name}")
+        else:
+            # Use config device (original behavior)
+            if self.audio_config and hasattr(self.audio_config, 'playback_device_name'):
+                os.environ['SDL_AUDIODRIVER'] = 'alsa'
+                os.environ['AUDIODEV'] = self.audio_config.playback_device_name
+                print(f"🔊 Audio output: {self.audio_config.playback_device_name}")
 
         # Initialize pygame mixer
         pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=1024)

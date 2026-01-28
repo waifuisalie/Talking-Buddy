@@ -33,6 +33,10 @@ class WhisperConfig:
     capture_device_name: str = "plughw:CARD=Device,DEV=0"  # USB PnP Sound Device (microphone)
     capture_device: int = 1  # PyAudio device index (1 = USB PnP Sound Device: Audio (hw:3,0))
 
+    # Audio device auto-detection (NEW)
+    auto_detect_input: bool = True  # Enable auto-detection of input device
+    input_device_preference: Optional[str] = None  # User preference from CLI (overrides auto-detection)
+
     # VAD (Voice Activity Detection) settings
     # Adjust silence_threshold based on debug output (🔊 RMS values):
     # - Too high (500+): Won't detect speech at all
@@ -86,6 +90,10 @@ class AudioConfig:
     # ALSA output device configuration - STABLE across reboots
     # HifiBerry DAC output (card 2, device 0)
     playback_device_name: str = "hw:CARD=sndrpihifiberry,DEV=0"  # HifiBerry DAC
+
+    # Audio device auto-detection (NEW)
+    auto_detect_output: bool = True  # Enable auto-detection of output device
+    output_device_preference: Optional[str] = None  # User preference from CLI (overrides auto-detection)
 
 @dataclass
 class ConversationConfig:
