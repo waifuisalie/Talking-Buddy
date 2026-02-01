@@ -35,6 +35,7 @@ import dismissal_detector
 import timeout_manager
 import sleep_manager
 import gpio_controller
+import audio_device_detector
 
 class SentenceDetector:
     """Detects sentence boundaries from streaming text chunks"""
@@ -222,6 +223,9 @@ class VoiceChatbot:
         self.audio_player = None
         self.conversation_manager = None
 
+        # Audio device detector (NEW)
+        self.device_detector = None
+
         # GPIO/LED controller
         self.led_controller = None
 
@@ -269,6 +273,14 @@ class VoiceChatbot:
             return False
 
         try:
+            # Initialize audio device detector (NEW)
+            self.device_detector = audio_device_detector.AudioDeviceDetector(
+                debug_mode=self.config.whisper.debug_mode
+            )
+            if not self.device_detector.initialize():
+                print("⚠️  Failed to initialize device detector")
+                self.device_detector = None
+
             # Initialize conversation manager
             save_path = Path.home() / ".voice_chatbot" / "conversation.json"
             self.conversation_manager = conversation.ConversationManager(
@@ -288,8 +300,11 @@ class VoiceChatbot:
                 print("❌ Piper TTS is not available.")
                 return False
 
-            # Initialize audio player
-            self.audio_player = audio_utils.AudioPlayer()
+            # Initialize audio player with device detector
+            self.audio_player = audio_utils.AudioPlayer(
+                audio_config=self.config.audio,
+                device_detector=self.device_detector
+            )
 
             # Initialize LED controller
             if self.config.gpio.enabled:
@@ -305,11 +320,12 @@ class VoiceChatbot:
                     print("   (Continuing without LED feedback)")
                     self.led_controller = None
 
-            # Initialize STT with callbacks
+            # Initialize STT with callbacks and device detector
             self.whisper_stt = whisper_stt.WhisperSTT(
                 self.config.whisper,
                 callback=self._on_transcription_received,
-                on_speech_detected=self._on_speech_activity_detected
+                on_speech_detected=self._on_speech_activity_detected,
+                device_detector=self.device_detector
             )
 
             # NOTE: SilenceDetector registration removed - whisper_stt.py handles VAD internally
@@ -410,6 +426,10 @@ class VoiceChatbot:
         # Cleanup LED controller
         if self.led_controller:
             self.led_controller.cleanup()
+
+        # Cleanup device detector (NEW)
+        if self.device_detector:
+            self.device_detector.cleanup()
 
         # Wake from deep sleep if needed (so Ollama is available for next run)
         if self.state_manager.is_state("deep_sleep"):

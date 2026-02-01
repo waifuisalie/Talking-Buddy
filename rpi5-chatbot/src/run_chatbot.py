@@ -20,16 +20,26 @@ import audio_utils
 import ollama_llm
 import piper_tts
 import esp32_wake_listener
+import audio_device_detector
 
-def create_custom_config(model_name=None, language_mode="native", interaction_mode="smart"):
+def create_custom_config(model_name=None, language_mode="native", interaction_mode="smart",
+                        input_device=None, output_device=None):
     """Create a custom configuration if needed
 
     Args:
         model_name: Model name (e.g., "qwen2.5:1.5b", "gemma3:1b", "llama3.2:1b")
         language_mode: "native" for native Portuguese support, "pt-br" for forced Portuguese via Modelfile
         interaction_mode: "single-shot", "conversation", or "smart" (default)
+        input_device: Override input device (name pattern or index)
+        output_device: Override output device (name pattern or index)
     """
     chatbot_config = config.ChatbotConfig.from_env()
+
+    # Apply device overrides
+    if input_device:
+        chatbot_config.whisper.input_device_preference = input_device
+    if output_device:
+        chatbot_config.audio.output_device_preference = output_device
 
     # Apply model selection if provided
     if model_name:
@@ -84,6 +94,51 @@ def create_custom_config(model_name=None, language_mode="native", interaction_mo
 
     return chatbot_config
 
+def list_audio_devices():
+    """List all available audio devices"""
+    detector = audio_device_detector.AudioDeviceDetector(debug_mode=True)
+    if not detector.initialize():
+        print("❌ Failed to initialize audio system")
+        return
+
+    devices = detector.list_all_devices()
+
+    print("\n🎤 Available Audio Devices")
+    print("=" * 80)
+
+    # Print input devices
+    print("\nINPUT DEVICES (Microphones):")
+    input_devices = [d for d in devices if d.max_input_channels > 0]
+    if not input_devices:
+        print("  ❌ No input devices found")
+    else:
+        for device in input_devices:
+            print(f"\n  [{device.index}] {device.name}")
+            print(f"      Channels: {device.max_input_channels} input")
+            print(f"      Sample Rate: {device.default_sample_rate} Hz")
+            alsa_name = detector._extract_alsa_name(device, is_input=True)
+            if alsa_name:
+                print(f"      ALSA: {alsa_name}")
+
+    # Print output devices
+    print("\nOUTPUT DEVICES (Speakers):")
+    output_devices = [d for d in devices if d.max_output_channels > 0]
+    if not output_devices:
+        print("  ❌ No output devices found")
+    else:
+        for device in output_devices:
+            print(f"\n  [{device.index}] {device.name}")
+            print(f"      Channels: {device.max_output_channels} output")
+            print(f"      Sample Rate: {device.default_sample_rate} Hz")
+            alsa_name = detector._extract_alsa_name(device, is_input=False)
+            if alsa_name:
+                print(f"      ALSA: {alsa_name}")
+
+    detector.cleanup()
+    print("\n💡 Usage Examples:")
+    print("  python src/run_chatbot.py --input-device 'USB' --output-device 'Headphones'")
+    print("  python src/run_chatbot.py --input-device 2 --output-device 5")
+
 def main():
     parser = argparse.ArgumentParser(description="Voice Chatbot System")
 
@@ -133,6 +188,23 @@ def main():
         help="Interaction mode (default: smart). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat, 'smart' for hybrid (continues if AI asks question)"
     )
 
+    # Audio device arguments
+    parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List all available audio devices and exit"
+    )
+    parser.add_argument(
+        "--input-device",
+        type=str,
+        help="Override input device (name pattern or index)"
+    )
+    parser.add_argument(
+        "--output-device",
+        type=str,
+        help="Override output device (name pattern or index)"
+    )
+
     # Operation arguments
     parser.add_argument("--test", action="store_true", help="Run system tests")
     parser.add_argument("--clear-history", action="store_true", help="Clear conversation history")
@@ -141,8 +213,16 @@ def main():
 
     args = parser.parse_args()
 
+    # Handle --list-devices first (special case)
+    if args.list_devices:
+        list_audio_devices()
+        return
+
     # Create configuration with model selection and interaction mode
-    chatbot_config = create_custom_config(args.model, args.language, args.interaction_mode)
+    chatbot_config = create_custom_config(
+        args.model, args.language, args.interaction_mode,
+        args.input_device, args.output_device
+    )
 
     if args.test:
         print("🧪 Running system tests...")
