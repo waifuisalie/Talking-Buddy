@@ -21,9 +21,10 @@ import ollama_llm
 import piper_tts
 import esp32_wake_listener
 import audio_device_detector
+import personality_manager
 
 def create_custom_config(model_name=None, language_mode="native", interaction_mode="smart",
-                        input_device=None, output_device=None):
+                        input_device=None, output_device=None, personality=None, base_model=None):
     """Create a custom configuration if needed
 
     Args:
@@ -32,8 +33,13 @@ def create_custom_config(model_name=None, language_mode="native", interaction_mo
         interaction_mode: "single-shot", "conversation", or "smart" (default)
         input_device: Override input device (name pattern or index)
         output_device: Override output device (name pattern or index)
+        personality: Personality ID (e.g., "casual", "formal", "humorous")
+        base_model: Base model for personality (e.g., "gemma3", "qwen2.5", "llama3.2")
     """
     chatbot_config = config.ChatbotConfig.from_env()
+
+    # Initialize personality manager
+    pm = personality_manager.get_personality_manager()
 
     # Apply device overrides
     if input_device:
@@ -41,8 +47,31 @@ def create_custom_config(model_name=None, language_mode="native", interaction_mo
     if output_device:
         chatbot_config.audio.output_device_preference = output_device
 
-    # Apply model selection if provided
-    if model_name:
+    # Apply personality + model selection
+    if personality:
+        # Personality mode: use personality manager to resolve model name
+        if not pm.personality_exists(personality):
+            print(f"❌ Error: Unknown personality '{personality}'")
+            print("\n🎭 Available personalities:")
+            pm.print_personalities()
+            sys.exit(1)
+
+        # Determine base model (CLI > config > default)
+        base = base_model or chatbot_config.ollama.base_model_preference
+
+        # Resolve full model name: {base}-ptbr-{personality}
+        final_model = pm.resolve_model_name(base, personality, explicit_model=model_name)
+
+        chatbot_config.ollama.model = final_model
+        chatbot_config.ollama.personality = personality
+        chatbot_config.ollama.base_model_preference = base
+
+        personality_info = pm.get_personality(personality)
+        print(f"🎭 Personality: {personality_info['name']} - {personality_info['description']}")
+        print(f"📦 Model: {final_model}")
+
+    elif model_name:
+        # Legacy mode: explicit model name without personality
         if language_mode == "pt-br":
             # Use the -ptbr variant (created from Modelfile)
             # Convert model names to their pt-br equivalents
@@ -93,6 +122,11 @@ def create_custom_config(model_name=None, language_mode="native", interaction_mo
     # config.conversation.system_prompt = "Your custom system prompt"
 
     return chatbot_config
+
+def list_personalities():
+    """List all available personality profiles"""
+    pm = personality_manager.get_personality_manager()
+    pm.print_personalities()
 
 def list_audio_devices():
     """List all available audio devices"""
@@ -146,8 +180,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="gemma3-ptbr",
-        help="Model to use (default: qwen2.5:1.5b). Options: qwen2.5:1.5b, gemma3:1b, gemma3:1b-it-qat, llama3.2:1b, mistral"
+        default=None,
+        help="Model to use (default: gemma3-ptbr). Options: qwen2.5:1.5b, gemma3:1b, gemma3:1b-it-qat, llama3.2:1b, mistral. If --personality is used, this overrides auto-generated model name."
     )
     parser.add_argument(
         "--language",
@@ -155,6 +189,25 @@ def main():
         choices=["native", "pt-br"],
         default="native",
         help="Language mode (default: native). 'native' uses model's native Portuguese support, 'pt-br' forces Portuguese via Modelfile"
+    )
+
+    # Personality arguments (NEW)
+    parser.add_argument(
+        "--personality",
+        type=str,
+        help="Personality profile (e.g., casual, formal, humorous). Use --list-personalities to see all options."
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        choices=["gemma3", "qwen2.5", "llama3.2"],
+        default="gemma3",
+        help="Base model for personality (default: gemma3). Only used with --personality."
+    )
+    parser.add_argument(
+        "--list-personalities",
+        action="store_true",
+        help="List all available personality profiles and exit"
     )
 
     # Wake word integration arguments
@@ -213,15 +266,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle --list-devices first (special case)
+    # Handle special listing commands first
     if args.list_devices:
         list_audio_devices()
         return
 
-    # Create configuration with model selection and interaction mode
+    if args.list_personalities:
+        list_personalities()
+        return
+
+    # Create configuration with model selection, personality, and interaction mode
     chatbot_config = create_custom_config(
         args.model, args.language, args.interaction_mode,
-        args.input_device, args.output_device
+        args.input_device, args.output_device,
+        args.personality, args.base_model
     )
 
     if args.test:

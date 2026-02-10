@@ -55,6 +55,10 @@ class OllamaConfig:
     max_tokens: int = 800  # Increased from 250 to allow longer responses
     timeout: int = 30
 
+    # Personality configuration (NEW)
+    personality: str = "neutral"  # Default personality: neutral, casual, formal, humorous, etc.
+    base_model_preference: str = "gemma3"  # Base model: gemma3, qwen2.5, llama3.2
+
     # Available 1B models (recommended for Raspberry Pi 5):
     # NATIVE PORTUGUESE (no forcing):
     #   - qwen2.5:1.5b         (4.50/5 quality, 3.42s, 1.5-2.0 GB) ⭐ QUALITY
