@@ -28,6 +28,8 @@ import config
 import whisper_stt
 import ollama_llm
 import piper_tts
+import supertonic_tts
+import personality_manager
 import audio_utils
 import conversation
 import esp32_wake_listener
@@ -138,16 +140,16 @@ class SentenceDetector:
 class StreamingTTSProcessor:
     """Processes streaming LLM chunks into TTS audio queue"""
 
-    def __init__(self, piper_tts, audio_player, min_sentence_length: int = 30):
+    def __init__(self, tts_engine, audio_player, min_sentence_length: int = 30):
         """
         Initialize streaming TTS processor
 
         Args:
-            piper_tts: PiperTTS instance for synthesis
+            tts_engine: TTS instance (PiperTTS or SupertonicTTS) for synthesis
             audio_player: AudioPlayer instance with queue support
             min_sentence_length: Minimum characters for sentence detection
         """
-        self.piper_tts = piper_tts
+        self.tts = tts_engine
         self.audio_player = audio_player
         self.sentence_detector = SentenceDetector(min_sentence_length)
         self.full_response = ""
@@ -169,7 +171,7 @@ class StreamingTTSProcessor:
         for sentence in sentences:
             print(f"🎙️ Synthesizing sentence ({len(sentence)} chars): {sentence[:80]}...")
             try:
-                audio_file = self.piper_tts.synthesize_to_temp(sentence)
+                audio_file = self.tts.synthesize_to_temp(sentence)
                 if audio_file:
                     metadata = {
                         "text": sentence,
@@ -188,7 +190,7 @@ class StreamingTTSProcessor:
         if final_sentence:
             print(f"🎙️ Finalizing: synthesizing remaining buffer ({len(final_sentence)} chars): {final_sentence[:80]}...")
             try:
-                audio_file = self.piper_tts.synthesize_to_temp(final_sentence)
+                audio_file = self.tts.synthesize_to_temp(final_sentence)
                 if audio_file:
                     metadata = {
                         "text": final_sentence,
@@ -219,9 +221,10 @@ class VoiceChatbot:
         # Core components
         self.whisper_stt = None
         self.ollama_llm = None
-        self.piper_tts = None
+        self.tts = None  # TTS engine (Piper or Supertonic)
         self.audio_player = None
         self.conversation_manager = None
+        self.system_prompt = ""  # Extracted personality system prompt
 
         # Audio device detector (NEW)
         self.device_detector = None
@@ -294,10 +297,30 @@ class VoiceChatbot:
                 print("❌ Ollama service is not available. Please start Ollama first.")
                 return False
 
-            # Initialize TTS
-            self.piper_tts = piper_tts.PiperTTS(self.config.piper)
-            if not self.piper_tts.is_available():
-                print("❌ Piper TTS is not available.")
+            # Extract personality system prompt (FIX: was never extracted before!)
+            pm = personality_manager.get_personality_manager()
+            personality_data = pm.get_personality(self.config.ollama.personality)
+
+            if personality_data:
+                base_prompt = personality_data['system_prompt']
+                # Localize for target language
+                target_language = self.config.supertonic.language if hasattr(self.config, 'supertonic') else 'pt'
+                self.system_prompt = self._localize_system_prompt(base_prompt, target_language)
+                print(f"✅ Loaded personality '{self.config.ollama.personality}' for language '{target_language}'")
+            else:
+                self.system_prompt = self.config.conversation.system_prompt  # Fallback
+                print(f"⚠️  Personality '{self.config.ollama.personality}' not found, using default system prompt")
+
+            # Initialize TTS (conditional based on engine)
+            if self.config.tts_engine == "supertonic":
+                # Sync personality to supertonic config
+                self.config.supertonic.personality = self.config.ollama.personality
+                self.tts = supertonic_tts.SupertonicTTS(self.config.supertonic)
+            else:
+                self.tts = piper_tts.PiperTTS(self.config.piper)
+
+            if not self.tts.is_available():
+                print(f"❌ {self.config.tts_engine.title()} TTS is not available.")
                 return False
 
             # Initialize audio player with device detector
@@ -351,6 +374,32 @@ class VoiceChatbot:
         except Exception as e:
             print(f"❌ Error initializing components: {e}")
             return False
+
+    def _localize_system_prompt(self, base_prompt: str, language: str) -> str:
+        """
+        Localize system prompt for target language
+
+        Replaces the Portuguese language instruction with the appropriate
+        instruction for the target language.
+
+        Args:
+            base_prompt: Base system prompt from personality definition
+            language: Target language code (pt, en, es)
+
+        Returns:
+            Localized system prompt
+        """
+        LANGUAGE_INSTRUCTIONS = {
+            "pt": "Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta.",
+            "en": "You are a helpful and friendly assistant. Always respond in English, regardless of the question's language.",
+            "es": "Eres un asistente útil y amigable. Siempre responde en español, independientemente del idioma de la pregunta."
+        }
+
+        # The Portuguese instruction to replace
+        pt_instruction = "Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta."
+
+        # Replace with target language instruction
+        return base_prompt.replace(pt_instruction, LANGUAGE_INSTRUCTIONS.get(language, pt_instruction))
 
     def start(self, start_mode: str = "light_sleep") -> bool:
         """
@@ -440,8 +489,8 @@ class VoiceChatbot:
         #     self.silence_detector.stop_monitoring()
 
         # Cleanup
-        if self.piper_tts:
-            self.piper_tts.cleanup_temp_files()
+        if self.tts:
+            self.tts.cleanup_temp_files()
 
         audio_utils.cleanup_temp_files()
 
@@ -547,7 +596,7 @@ class VoiceChatbot:
             print("🤖 Generating response...")
             ai_response = self.ollama_llm.generate_response(
                 user_input,
-                self.config.conversation.system_prompt
+                self.system_prompt  # Use extracted personality prompt
             )
 
             if ai_response:
@@ -555,7 +604,7 @@ class VoiceChatbot:
                 self.conversation_manager.add_assistant_message(ai_response)
 
                 # Convert to speech
-                audio_file = self.piper_tts.synthesize_to_temp(ai_response)
+                audio_file = self.tts.synthesize_to_temp(ai_response)
 
                 if audio_file:
                     # Play response
@@ -584,7 +633,7 @@ class VoiceChatbot:
 
             # Initialize streaming components
             tts_processor = StreamingTTSProcessor(
-                self.piper_tts,
+                self.tts,
                 self.audio_player,
                 min_sentence_length=self.config.conversation.min_sentence_length
             )
@@ -620,7 +669,7 @@ class VoiceChatbot:
             chunks_received = 0
             for chunk in self.ollama_llm.generate_streaming_response(
                 user_input,
-                self.config.conversation.system_prompt
+                self.system_prompt  # Use extracted personality prompt
             ):
                 tts_processor.process_chunk(chunk)
                 chunks_received += 1
@@ -954,8 +1003,8 @@ class VoiceChatbot:
 
     def say(self, text: str):
         """Make the assistant say something (for testing)"""
-        if self.piper_tts and self.audio_player:
-            audio_file = self.piper_tts.synthesize_to_temp(text)
+        if self.tts and self.audio_player:
+            audio_file = self.tts.synthesize_to_temp(text)
             if audio_file:
                 self.audio_player.play(audio_file, blocking=True)
                 Path(audio_file).unlink(missing_ok=True)

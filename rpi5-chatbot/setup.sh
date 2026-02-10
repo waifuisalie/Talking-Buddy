@@ -627,6 +627,20 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     fi
 done
 
+# Install Supertonic 2 TTS (multilingual, 9x faster than Piper)
+echo "🔄 Checking Supertonic 2 TTS..."
+if python -c "import supertonic" 2>/dev/null; then
+    echo "⏭️  Supertonic 2 TTS already installed"
+else
+    echo "🔄 Installing Supertonic 2 TTS..."
+    if pip install supertonic; then
+        echo "✅ Supertonic 2 TTS installed successfully"
+    else
+        echo "⚠️  Supertonic 2 installation failed (non-fatal)"
+        echo "   Piper TTS will be used as fallback"
+    fi
+fi
+
 # Verify critical packages installed
 echo "✅ Verifying critical packages..."
 CRITICAL_PACKAGES=("pygame" "requests" "numpy" "pyaudio" "serial" "psutil")
@@ -651,9 +665,9 @@ fi
 echo "✅ All critical packages verified"
 
 # ============================================================================
-# PHASE 7: CUSTOM MODEL CREATION
+# PHASE 7: PERSONALITY MODEL CREATION
 # ============================================================================
-CURRENT_PHASE="Phase 7/8: Creating custom Portuguese model"
+CURRENT_PHASE="Phase 7/8: Creating personality models"
 echo ""
 echo "🎯 $CURRENT_PHASE..."
 
@@ -663,12 +677,6 @@ cd "$SCRIPT_DIR"
 if ! check_directory "models"; then
     show_error "models/ directory not found" \
                "Directory structure may be incomplete"
-    exit 1
-fi
-
-if ! check_file "models/Modelfile.gemma3-ptbr"; then
-    show_error "Modelfile.gemma3-ptbr not found" \
-               "Model configuration file is missing"
     exit 1
 fi
 
@@ -686,7 +694,7 @@ fi
 # Verify base model exists
 if ! ollama list | grep -q "gemma3:1b"; then
     show_error "Base model gemma3:1b not found" \
-               "Base model must be downloaded before creating custom model"
+               "Base model must be downloaded before creating personality models"
     echo ""
     echo "Troubleshooting:"
     echo "  - Download base model: ollama pull gemma3:1b"
@@ -694,42 +702,59 @@ if ! ollama list | grep -q "gemma3:1b"; then
     exit 1
 fi
 
-# Check if custom model already exists (non-interactive check)
-if ollama list | grep -q "gemma3-ptbr"; then
-    echo "⏭️  Model gemma3-ptbr already exists, skipping creation"
-else
-    echo "🔄 Creating custom model gemma3-ptbr..."
-    echo "   This will take 1-2 minutes..."
+# Check if personality models already exist
+EXISTING_PERSONALITIES=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2).*-ptbr-" | wc -l)
 
-    # Create model directly (non-interactive)
-    cd models/
-    if ! ollama create gemma3-ptbr -f Modelfile.gemma3-ptbr; then
-        show_error "Failed to create gemma3-ptbr model" \
-                   "Model creation command failed"
-        echo ""
-        echo "Troubleshooting:"
-        echo "  - Check Modelfile: cat models/Modelfile.gemma3-ptbr"
-        echo "  - Check Ollama logs: journalctl -u ollama -n 50"
-        echo "  - Try manual creation: cd models && ollama create gemma3-ptbr -f Modelfile.gemma3-ptbr"
-        exit 1
-    fi
-
-    cd "$SCRIPT_DIR"
-    echo "✅ Custom model created successfully"
+if [ "$EXISTING_PERSONALITIES" -gt 0 ]; then
+    echo "⏭️  Found $EXISTING_PERSONALITIES personality model(s) already created"
+    echo "   Checking if all personalities exist..."
 fi
 
-# Verify model creation
-if ! ollama list | grep -q "gemma3-ptbr"; then
-    show_error "gemma3-ptbr model not found after creation" \
-               "Model creation may have failed silently"
+# Generate Modelfiles if needed
+if [ ! -d "models/gemma3" ] || [ ! -f "models/gemma3/Modelfile.casual" ]; then
+    echo "🔄 Generating personality Modelfiles from personalities.yaml..."
+    cd models/
+    if python3 generate_personalities.py; then
+        echo "✅ Modelfiles generated successfully"
+    else
+        show_error "Failed to generate personality Modelfiles" \
+                   "Check personalities.yaml and generate_personalities.py"
+        echo ""
+        echo "Troubleshooting:"
+        echo "  - Check YAML: cat models/personalities.yaml"
+        echo "  - Run manually: cd models && python3 generate_personalities.py"
+        exit 1
+    fi
+    cd "$SCRIPT_DIR"
+else
+    echo "⏭️  Personality Modelfiles already generated"
+fi
+
+# Create all personality models
+echo "🔄 Creating personality models..."
+cd models/
+if bash create_all_personalities.sh; then
+    echo "✅ Personality models created/verified successfully"
+else
+    echo "⚠️  Some personality models may have failed (non-fatal)"
+    echo "   You can still use available models"
+fi
+cd "$SCRIPT_DIR"
+
+# Verify at least one personality model exists
+PERSONALITY_COUNT=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2).*-ptbr-" | wc -l)
+if [ "$PERSONALITY_COUNT" -eq 0 ]; then
+    show_error "No personality models found after creation" \
+               "Model creation may have failed"
     echo ""
     echo "Troubleshooting:"
     echo "  - List models: ollama list"
     echo "  - Check Ollama logs: journalctl -u ollama -n 50"
+    echo "  - Try manual creation: cd models && bash create_all_personalities.sh"
     exit 1
 fi
 
-echo "✅ Model gemma3-ptbr verified"
+echo "✅ Verified $PERSONALITY_COUNT personality model(s)"
 
 # ============================================================================
 # PHASE 8: VERIFY INSTALLATION
@@ -789,28 +814,40 @@ echo ""
 echo "Installed Components:"
 echo "✅ System dependencies (build tools, audio libraries)"
 echo "✅ whisper.cpp (speech-to-text)"
-echo "   └─ Model: ggml-base.bin"
+echo "   └─ Model: ggml-base.bin (multilingual)"
 echo "   └─ Location: ~/whisper.cpp"
-echo "✅ Piper TTS (text-to-speech)"
+echo "✅ Piper TTS (text-to-speech - Portuguese)"
 echo "   └─ Model: pt_BR-faber-medium"
 echo "   └─ Location: ~/piper/piper"
+echo "✅ Supertonic 2 TTS (text-to-speech - multilingual, 9x faster)"
+echo "   └─ Languages: Portuguese, English, Spanish"
+echo "   └─ Voices: 8 unique voices (F1-F5, M1-M3)"
 echo "✅ Ollama (LLM service)"
 echo "   └─ Service: Active"
-echo "   └─ Models: gemma3:1b, gemma3-ptbr"
+echo "   └─ Base model: gemma3:1b"
+echo "   └─ Personalities: $PERSONALITY_COUNT models created"
 echo "✅ Python environment"
 echo "   └─ Location: ./venv"
-echo "   └─ Packages: pygame, requests, numpy, pyaudio, pyserial, psutil"
+echo "   └─ Packages: pygame, requests, numpy, pyaudio, pyserial, psutil, supertonic"
 echo ""
 echo "Next Steps:"
-echo "1. Start the chatbot:"
+echo "1. Test with different personalities (keyboard mode):"
 echo "   cd rpi5-chatbot"
 echo "   source venv/bin/activate"
-echo "   python src/run_chatbot.py --wake-mode keyboard --model gemma3-ptbr"
+echo "   python src/run_chatbot.py --wake-mode keyboard --personality casual"
+echo "   python src/run_chatbot.py --wake-mode keyboard --personality humorous --language en"
 echo ""
-echo "2. For production with ESP32 wake word:"
-echo "   python src/run_chatbot.py --wake-mode serial --model gemma3-ptbr"
+echo "2. Test with Supertonic TTS (9x faster, multilingual):"
+echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language pt"
+echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language en --personality formal"
 echo ""
-echo "3. View available commands:"
+echo "3. For production with ESP32 wake word:"
+echo "   python src/run_chatbot.py --wake-mode serial --personality casual --tts-engine supertonic"
+echo ""
+echo "4. View available personalities:"
+echo "   python src/run_chatbot.py --list-personalities"
+echo ""
+echo "5. View all available commands:"
 echo "   python src/run_chatbot.py --help"
 echo ""
 echo "Troubleshooting:"
@@ -818,6 +855,8 @@ echo "  - Setup log: $LOG_FILE"
 echo "  - Test system: python src/run_chatbot.py --test"
 echo "  - Check Ollama: systemctl status ollama"
 echo "  - Check models: ollama list"
+echo "  - List personalities: python src/run_chatbot.py --list-personalities"
+echo "  - List audio devices: python src/run_chatbot.py --list-devices"
 echo ""
 echo "Documentation: README.md"
 echo ""

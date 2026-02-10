@@ -86,6 +86,16 @@ class PiperConfig:
     temp_dir: str = "/tmp"
 
 @dataclass
+class SupertonicConfig:
+    """Supertonic 2 TTS configuration"""
+    language: str = "pt"  # pt, en, or es
+    personality: str = "neutral"  # Inherited from OllamaConfig
+    temp_dir: str = "/tmp"
+    # Optional future enhancements:
+    # speed: float = 1.0
+    # pitch_shift: float = 0.0
+
+@dataclass
 class AudioConfig:
     silence_threshold: float = 1.0  # seconds
     sample_rate: int = 16000
@@ -135,9 +145,11 @@ class ChatbotConfig:
         self.whisper = WhisperConfig()
         self.ollama = OllamaConfig()
         self.piper = PiperConfig()
+        self.supertonic = SupertonicConfig()
         self.audio = AudioConfig()
         self.conversation = ConversationConfig()
         self.gpio = GPIOConfig()
+        self.tts_engine = "piper"  # Default to piper during migration (change to "supertonic" after testing)
 
     def validate(self):
         """Validate that all required files and services exist"""
