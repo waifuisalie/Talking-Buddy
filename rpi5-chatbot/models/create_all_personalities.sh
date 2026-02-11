@@ -88,6 +88,10 @@ CREATED=0
 SKIPPED=0
 FAILED=0
 
+# Temporarily disable exit on error for the creation loop
+# (we want to continue even if one model fails)
+set +e
+
 # Iterate through base model directories
 for base_dir in gemma3 llama3.2 qwen2.5; do
     if [ ! -d "$base_dir" ]; then
@@ -101,9 +105,15 @@ for base_dir in gemma3 llama3.2 qwen2.5; do
     echo ""
     echo "📦 Processing $base_dir models ($modelfile_count personalities)..."
 
+    # Debug: Check if files exist
+    if [ "$modelfile_count" -eq 0 ]; then
+        echo "   ⚠️  No Modelfiles found in $base_dir/"
+        continue
+    fi
+
     for modelfile in "$base_dir"/Modelfile.*; do
         if [ -f "$modelfile" ]; then
-            ((current++))
+            current=$((current + 1))
             # Extract personality from filename (e.g., Modelfile.casual -> casual)
             personality=$(basename "$modelfile" | sed 's/^Modelfile\.//')
 
@@ -111,16 +121,19 @@ for base_dir in gemma3 llama3.2 qwen2.5; do
 
             if create_model "$modelfile" "$base_dir" "$personality"; then
                 if ollama list | grep -q "${base_dir}-ptbr-${personality}"; then
-                    ((CREATED++))
+                    CREATED=$((CREATED + 1))
                 else
-                    ((SKIPPED++))
+                    SKIPPED=$((SKIPPED + 1))
                 fi
             else
-                ((FAILED++))
+                FAILED=$((FAILED + 1))
             fi
         fi
     done
 done
+
+# Re-enable exit on error
+set -e
 
 echo ""
 echo "=========================================="
