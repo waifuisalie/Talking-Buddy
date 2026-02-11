@@ -39,6 +39,13 @@ class AudioPlayer:
 
         # Auto-detect output device if enabled
         if self.audio_config and self.audio_config.auto_detect_output and self.device_detector:
+            # Determine source of device selection
+            device_source = "auto-detected"
+            if self.audio_config.output_device_preference:
+                device_source = "user-specified"
+            elif self.audio_config.playback_device_name:
+                device_source = "from config"
+
             detected = self.device_detector.detect_output_device(
                 user_preference=self.audio_config.output_device_preference,
                 config_preference=self.audio_config.playback_device_name
@@ -47,14 +54,14 @@ class AudioPlayer:
                 output_device = detected.alsa_name or detected.name
                 os.environ['SDL_AUDIODRIVER'] = 'alsa'
                 os.environ['AUDIODEV'] = output_device
-                print(f"🔊 Output: {detected.name} (auto-detected)")
+                print(f"🔊 Output: {detected.name} ({device_source})")
             else:
                 print("⚠️  No output device detected, using config fallback")
                 # Fall back to config device
                 if hasattr(self.audio_config, 'playback_device_name'):
                     os.environ['SDL_AUDIODRIVER'] = 'alsa'
                     os.environ['AUDIODEV'] = self.audio_config.playback_device_name
-                    print(f"🔊 Audio output: {self.audio_config.playback_device_name}")
+                    print(f"🔊 Audio output: {self.audio_config.playback_device_name} (fallback)")
         else:
             # Use config device (original behavior)
             if self.audio_config and hasattr(self.audio_config, 'playback_device_name'):

@@ -131,7 +131,14 @@ class WhisperSTT:
 
             # Auto-detect input device if enabled
             device_index = None
+            device_source = "auto-detected"  # Track how device was selected
             if self.config.auto_detect_input and self.device_detector:
+                # Determine source of device selection
+                if self.config.input_device_preference:
+                    device_source = "user-specified"
+                elif self.config.capture_device_name:
+                    device_source = "from config"
+
                 detected = self.device_detector.detect_input_device(
                     user_preference=self.config.input_device_preference,
                     config_preference=self.config.capture_device_name
@@ -140,9 +147,10 @@ class WhisperSTT:
                     device_index = detected.index
                     if detected.alsa_name:
                         os.environ['AUDIODEV'] = detected.alsa_name
-                    print(f"🎤 Input: {detected.name} (auto-detected)")
+                    print(f"🎤 Input: {detected.name} ({device_source})")
                 else:
                     print("⚠️  Auto-detection failed, using fallback")
+                    device_source = "fallback"
 
             # Fallback: Try to find device by name if configured
             if device_index is None and hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
@@ -154,11 +162,31 @@ class WhisperSTT:
             if device_index is None and self.config.capture_device >= 0:
                 device_index = self.config.capture_device
 
+            # Check device sample rate and adjust if needed
+            actual_sample_rate = self.config.sample_rate
+            if device_index is not None:
+                device_info = self.audio.get_device_info_by_index(device_index)
+                device_rate = int(device_info['defaultSampleRate'])
+
+                # If device doesn't support our configured rate, use device's native rate
+                # whisper.cpp can handle various sample rates (will resample internally)
+                try:
+                    self.audio.is_format_supported(
+                        self.config.sample_rate,
+                        input_device=device_index,
+                        input_channels=1,
+                        input_format=pyaudio.paInt16
+                    )
+                except ValueError:
+                    print(f"⚠️  Device doesn't support {self.config.sample_rate} Hz, using native {device_rate} Hz")
+                    print(f"   (Whisper will handle resampling)")
+                    actual_sample_rate = device_rate
+
             # Open audio stream
             stream_kwargs = {
                 'format': pyaudio.paInt16,
                 'channels': 1,
-                'rate': self.config.sample_rate,
+                'rate': actual_sample_rate,
                 'input': True,
                 'frames_per_buffer': self.config.chunk_size
             }
@@ -168,6 +196,9 @@ class WhisperSTT:
                 stream_kwargs['input_device_index'] = device_index
 
             self.stream = self.audio.open(**stream_kwargs)
+
+            # Store actual rate for WAV file creation
+            self._actual_sample_rate = actual_sample_rate
 
             self.is_running = True
             self.is_paused = False  # Ensure not paused on start
@@ -293,8 +324,11 @@ class WhisperSTT:
         if not self.audio_frames:
             return
 
+        # Use actual sample rate (which may differ from config if device doesn't support it)
+        actual_rate = getattr(self, '_actual_sample_rate', self.config.sample_rate)
+
         # Check minimum duration
-        duration = len(self.audio_frames) * self.config.chunk_size / self.config.sample_rate
+        duration = len(self.audio_frames) * self.config.chunk_size / actual_rate
         if duration < self.min_audio_length:
             print(f"⏭️  Audio too short ({duration:.1f}s), skipping...")
             return
@@ -309,7 +343,7 @@ class WhisperSTT:
                     with wave.open(temp_path, 'wb') as wf:
                         wf.setnchannels(1)
                         wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
-                        wf.setframerate(self.config.sample_rate)
+                        wf.setframerate(actual_rate)
                         wf.writeframes(b''.join(self.audio_frames))
 
                 print(f"💾 Audio saved ({duration:.1f}s), transcribing...")
