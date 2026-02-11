@@ -55,6 +55,7 @@ python3 generate_personalities.py || {
 
 echo ""
 echo "📝 Creating personality models in Ollama..."
+echo "   ⏱️  Each model takes ~5-10 seconds to create"
 echo ""
 
 # Function to create a model
@@ -71,11 +72,13 @@ create_model() {
     fi
 
     echo "   🔧 Creating $model_name..."
-    if ollama create "$model_name" -f "$modelfile" > /dev/null 2>&1; then
-        echo "   ✅ $model_name created"
+    # Create model and capture output
+    if output=$(ollama create "$model_name" -f "$modelfile" 2>&1); then
+        echo "   ✅ $model_name created successfully"
         return 0
     else
         echo "   ❌ Failed to create $model_name"
+        echo "      Error: $output"
         return 1
     fi
 }
@@ -91,13 +94,20 @@ for base_dir in gemma3 llama3.2 qwen2.5; do
         continue
     fi
 
+    # Count modelfiles for progress indication
+    modelfile_count=$(find "$base_dir" -name "Modelfile.*" -type f | wc -l)
+    current=0
+
     echo ""
-    echo "📦 Processing $base_dir models..."
+    echo "📦 Processing $base_dir models ($modelfile_count personalities)..."
 
     for modelfile in "$base_dir"/Modelfile.*; do
         if [ -f "$modelfile" ]; then
+            ((current++))
             # Extract personality from filename (e.g., Modelfile.casual -> casual)
             personality=$(basename "$modelfile" | sed 's/^Modelfile\.//')
+
+            echo "   [$current/$modelfile_count] Processing: $personality"
 
             if create_model "$modelfile" "$base_dir" "$personality"; then
                 if ollama list | grep -q "${base_dir}-ptbr-${personality}"; then
