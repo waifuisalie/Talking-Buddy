@@ -164,9 +164,9 @@ run_preflight_checks() {
         debug_log "Piper model: $piper_model"
     fi
 
-    # Check Supertonic TTS
+    # Check Supertonic TTS (must use venv python)
     local supertonic_available=0
-    if python -c "import supertonic" 2>/dev/null; then
+    if venv/bin/python -c "import supertonic" 2>/dev/null; then
         echo "✅ Supertonic 2 TTS (Multilingual: pt, en, es)"
         supertonic_available=1
     else

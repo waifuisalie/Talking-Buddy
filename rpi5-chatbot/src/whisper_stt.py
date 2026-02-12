@@ -273,8 +273,18 @@ class WhisperSTT:
                 audio_data = self.stream.read(self.config.chunk_size, exception_on_overflow=False)
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
-                # Calculate RMS (volume level)
-                rms = np.sqrt(np.mean(audio_array**2))
+                # Calculate RMS (volume level) with NaN protection
+                # If audio buffer is corrupted, treat as silence
+                try:
+                    rms_squared = np.mean(audio_array.astype(np.float64)**2)
+                    if np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0:
+                        print(f"⚠️  Corrupted audio buffer detected (NaN/Inf values) - treating as silence")
+                        rms = 0.0  # Treat corrupted audio as silence
+                    else:
+                        rms = np.sqrt(rms_squared)
+                except (ValueError, RuntimeWarning):
+                    print(f"⚠️  Audio processing error - treating as silence")
+                    rms = 0.0  # Treat errors as silence
 
                 # Debug output - show RMS levels periodically
                 current_time = time.time()
