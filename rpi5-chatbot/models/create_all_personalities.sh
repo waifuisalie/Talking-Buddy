@@ -46,6 +46,25 @@ if [ ${#AVAILABLE_MODELS[@]} -eq 0 ]; then
     exit 1
 fi
 
+# Map base model names to directory names
+declare -A MODEL_TO_DIR=(
+    ["gemma3:1b"]="gemma3"
+    ["qwen2.5:1.5b"]="qwen2.5"
+    ["llama3.2:1b"]="llama3.2"
+)
+
+# Build list of directories to process
+DIRS_TO_PROCESS=()
+for model in "${AVAILABLE_MODELS[@]}"; do
+    dir="${MODEL_TO_DIR[$model]}"
+    if [ -n "$dir" ]; then
+        DIRS_TO_PROCESS+=("$dir")
+    fi
+done
+
+echo ""
+echo "📂 Will process directories: ${DIRS_TO_PROCESS[*]}"
+
 echo ""
 echo "🔨 Generating Modelfiles from personalities.yaml..."
 python3 generate_personalities.py || {
@@ -92,9 +111,10 @@ FAILED=0
 # (we want to continue even if one model fails)
 set +e
 
-# Iterate through base model directories
-for base_dir in gemma3 llama3.2 qwen2.5; do
+# Iterate through base model directories (only those with installed models)
+for base_dir in "${DIRS_TO_PROCESS[@]}"; do
     if [ ! -d "$base_dir" ]; then
+        echo "   ⚠️  Directory $base_dir not found (skipping)"
         continue
     fi
 

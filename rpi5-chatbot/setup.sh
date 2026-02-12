@@ -629,15 +629,42 @@ done
 
 # Install Supertonic 2 TTS (multilingual, 9x faster than Piper)
 echo "🔄 Checking Supertonic 2 TTS..."
-if python -c "import supertonic" 2>/dev/null; then
-    echo "⏭️  Supertonic 2 TTS already installed"
+
+# Check if both package AND model are installed
+if python -c "import supertonic; tts = supertonic.TTS(); print('OK')" 2>/dev/null | grep -q "OK"; then
+    echo "⏭️  Supertonic 2 TTS already installed (with model)"
 else
     echo "🔄 Installing Supertonic 2 TTS..."
+
+    # Step 1: Install Python package
     if pip install supertonic; then
-        echo "✅ Supertonic 2 TTS installed successfully"
+        echo "✅ Python package installed"
+
+        # Step 2: Trigger model download from HuggingFace
+        echo "🔄 Downloading TTS model (~305MB from HuggingFace)..."
+        echo "   This may take 2-5 minutes depending on connection..."
+
+        # Instantiate TTS() to trigger auto-download
+        if python -c "import supertonic; tts = supertonic.TTS(); print('Model loaded successfully')" 2>&1; then
+            echo "✅ Supertonic 2 TTS installed successfully (with model)"
+        else
+            echo "⚠️  Model download failed (non-fatal)"
+            echo "   Piper TTS will be used as fallback"
+            echo ""
+            echo "   Troubleshooting:"
+            echo "   - Check internet: ping huggingface.co"
+            echo "   - Check firewall/proxy settings"
+            echo "   - Try manual: python -c 'from supertonic import TTS; TTS()'"
+            echo "   - Check HuggingFace Hub access"
+        fi
     else
         echo "⚠️  Supertonic 2 installation failed (non-fatal)"
         echo "   Piper TTS will be used as fallback"
+        echo ""
+        echo "   Troubleshooting:"
+        echo "   - Check network connection"
+        echo "   - Try manual install: pip install supertonic"
+        echo "   - Check pip logs above for errors"
     fi
 fi
 

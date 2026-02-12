@@ -7,16 +7,42 @@ for each base model × personality combination.
 """
 
 import yaml
+import subprocess
 from pathlib import Path
 from typing import Dict, Any
 
 
-# Base models to generate personalities for
-BASE_MODELS = {
+# Known base models (for reference and fallback)
+KNOWN_BASE_MODELS = {
     "gemma3:1b": "gemma3",
     "qwen2.5:1.5b": "qwen2.5",
     "llama3.2:1b": "llama3.2",
 }
+
+
+def get_installed_base_models() -> Dict[str, str]:
+    """Query Ollama for installed base models and return name -> short_name mapping."""
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Parse ollama list output
+        installed = {}
+        for line in result.stdout.split('\n'):
+            for model_name, short_name in KNOWN_BASE_MODELS.items():
+                if model_name in line:
+                    installed[model_name] = short_name
+                    break
+
+        return installed
+    except Exception as e:
+        print(f"⚠️  Warning: Could not query Ollama: {e}")
+        print(f"   Falling back to gemma3:1b only")
+        return {"gemma3:1b": "gemma3"}
 
 
 def load_personalities(yaml_path: Path) -> Dict[str, Any]:
@@ -71,11 +97,28 @@ def main():
 
     print("🎭 Generating personality Modelfiles...\n")
 
+    # Dynamically detect installed base models
+    print("🔍 Detecting installed base models...")
+    base_models = get_installed_base_models()
+
+    if not base_models:
+        print("❌ No base models found in Ollama!")
+        print("   Install at least one:")
+        print("   - ollama pull gemma3:1b")
+        print("   - ollama pull qwen2.5:1.5b")
+        print("   - ollama pull llama3.2:1b")
+        return 1
+
+    print(f"✅ Found {len(base_models)} base model(s):")
+    for model_name in base_models.keys():
+        print(f"   - {model_name}")
+    print()
+
     personalities = load_personalities(yaml_path)
 
-    # Generate for each base model × personality combination
+    # Generate for each installed base model × personality combination
     total = 0
-    for base_model, model_short in BASE_MODELS.items():
+    for base_model, model_short in base_models.items():
         print(f"\n📦 Base model: {base_model}")
 
         # Create subdirectory if it doesn't exist
