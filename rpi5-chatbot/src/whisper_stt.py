@@ -239,6 +239,16 @@ class WhisperSTT:
         # Set flag first to signal recording thread to exit
         self.is_running = False
 
+        # Stop the stream BEFORE joining — this unblocks any pending
+        # stream.read() call that may be stuck in the ALSA driver.
+        # The recording loop's OSError handler will catch the interruption,
+        # see is_running=False, and exit cleanly.
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+            except Exception:
+                pass
+
         # Wait for recording thread to finish gracefully
         if self.recording_thread and self.recording_thread.is_alive():
             self.recording_thread.join(timeout=2.0)
@@ -251,10 +261,12 @@ class WhisperSTT:
             if self._processing_thread.is_alive():
                 print("⚠️  Processing thread did not exit cleanly")
 
-        # Now it's safe to close the audio stream
+        # Now close the stream and audio resources
         if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
+            try:
+                self.stream.close()
+            except Exception:
+                pass
             self.stream = None
 
         if self.audio:

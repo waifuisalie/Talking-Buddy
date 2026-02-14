@@ -52,7 +52,7 @@ class OllamaConfig:
     url: str = "http://localhost:11434/api/chat"  # Using /chat endpoint for proper message handling
     model: str = "gemma3-ptbr"  # Default: gemma3 with forced Portuguese (fastest for RPi5)
     temperature: float = 0.7
-    max_tokens: int = 800  # Increased from 250 to allow longer responses
+    max_tokens: int = 1500  # Enough for verbose personalities (educational, storyteller)
     timeout: int = 30
 
     # Personality configuration (NEW)
