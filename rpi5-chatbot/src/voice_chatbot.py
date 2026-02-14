@@ -665,13 +665,19 @@ class VoiceChatbot:
                 self.audio_player.signal_generation_complete()
 
                 # Wait for queue to finish playing (callback sets queue_finished flag)
-                # Timeout after 60 seconds to prevent infinite waiting
-                wait_start = time.time()
-                while not queue_finished and time.time() - wait_start < 60:
+                # Keep waiting as long as audio is actively playing.
+                # Only timeout if the player has been idle for 10s without
+                # queue_finished firing (indicates a callback bug, not long audio).
+                idle_since = None
+                while not queue_finished:
                     time.sleep(0.1)
-
-                if not queue_finished:
-                    print("⚠️  Timeout waiting for audio queue to finish")
+                    if self.audio_player.is_busy() or not self.audio_player.is_queue_empty():
+                        idle_since = None  # Still playing, reset idle timer
+                    elif idle_since is None:
+                        idle_since = time.time()  # Player just went idle
+                    elif time.time() - idle_since > 10:
+                        print("⚠️  Audio player idle but queue callback never fired — moving on")
+                        break
 
                 # Add complete response to history
                 if full_response.strip():
