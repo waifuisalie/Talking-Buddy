@@ -68,59 +68,37 @@ class SentenceDetector:
         self.buffer += chunk
         sentences = []
 
-        # Debug: Show buffer size periodically
-        if len(self.buffer) > 500 and len(self.buffer) % 100 < 10:
-            print(f"⚠️  Sentence buffer growing: {len(self.buffer)} chars, preview: {self.buffer[:100]}...")
-
         # Find sentence boundaries
         while True:
-            # Look for sentence ending characters
-            earliest_pos = -1
+            # Collect ALL sentence ending positions in the buffer
+            ending_positions = set()
             for ending in self.sentence_endings:
-                pos = self.buffer.find(ending)
-                if pos != -1:
-                    if earliest_pos == -1 or pos < earliest_pos:
-                        earliest_pos = pos
+                pos = 0
+                while True:
+                    pos = self.buffer.find(ending, pos)
+                    if pos == -1:
+                        break
+                    ending_positions.add(pos)
+                    pos += 1
 
-            # No sentence ending found
-            if earliest_pos == -1:
+            if not ending_positions:
                 break
 
-            # Extract potential sentence (include the ending character)
-            potential_sentence = self.buffer[:earliest_pos + 1].strip()
+            # Scan endings earliest-to-latest, flush at the first one that
+            # produces >= min_length chars.  This prevents deadlock when the
+            # first few endings are short fragments like "Olá!" (4 chars).
+            flushed = False
+            for pos in sorted(ending_positions):
+                potential_sentence = self.buffer[:pos + 1].strip()
+                if len(potential_sentence) >= self.min_sentence_length:
+                    sentences.append(potential_sentence)
+                    self.buffer = self.buffer[pos + 1:].strip()
+                    flushed = True
+                    break  # Restart outer loop to find more sentences
 
-            # Check if it meets minimum length
-            if len(potential_sentence) >= self.min_sentence_length:
-                sentences.append(potential_sentence)
-                # Remove sentence from buffer
-                self.buffer = self.buffer[earliest_pos + 1:].strip()
-            else:
-                # Too short, look for next ending after this one
-                # Keep this ending in buffer and look for the next one
-                if earliest_pos + 1 < len(self.buffer):
-                    # Look for next ending
-                    next_earliest = -1
-                    for ending in self.sentence_endings:
-                        pos = self.buffer.find(ending, earliest_pos + 1)
-                        if pos != -1:
-                            if next_earliest == -1 or pos < next_earliest:
-                                next_earliest = pos
-
-                    if next_earliest != -1:
-                        # Found another ending, try combining
-                        potential_sentence = self.buffer[:next_earliest + 1].strip()
-                        if len(potential_sentence) >= self.min_sentence_length:
-                            sentences.append(potential_sentence)
-                            self.buffer = self.buffer[next_earliest + 1:].strip()
-                        else:
-                            # Still too short, break and wait for more chunks
-                            break
-                    else:
-                        # No more endings, break and wait for more chunks
-                        break
-                else:
-                    # At end of buffer, break and wait for more chunks
-                    break
+            if not flushed:
+                # All endings produce text shorter than min_length — wait for more
+                break
 
         return sentences
 
