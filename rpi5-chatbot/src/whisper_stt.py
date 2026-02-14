@@ -13,6 +13,7 @@ RPI5 MODIFICATIONS:
 - Auto-detects PyAudio device index from ALSA name for stability
 """
 
+import queue
 import subprocess
 import wave
 import tempfile
@@ -70,7 +71,9 @@ class WhisperSTT:
 
         # Threading
         self.recording_thread = None
-        self.processing_lock = threading.Lock()
+        self._is_processing = False          # True while Whisper worker is running
+        self._processing_queue = queue.Queue(maxsize=1)  # Frames handed off to worker
+        self._processing_thread = None       # Worker thread for Whisper
 
     def _find_device_index_by_name(self, device_name: str) -> Optional[int]:
         """Find PyAudio device index by ALSA device name (fallback method)"""
@@ -207,6 +210,10 @@ class WhisperSTT:
             self.recording_thread = threading.Thread(target=self._recording_loop, daemon=True, name="WhisperRecording")
             self.recording_thread.start()
 
+            # Start processing worker thread (runs Whisper CLI asynchronously)
+            self._processing_thread = threading.Thread(target=self._processing_worker, daemon=True, name="WhisperProcessing")
+            self._processing_thread.start()
+
             print("🎤 Whisper STT (CLI mode) started successfully!")
             return True
 
@@ -225,6 +232,12 @@ class WhisperSTT:
             self.recording_thread.join(timeout=2.0)
             if self.recording_thread.is_alive():
                 print("⚠️  Recording thread did not exit cleanly")
+
+        # Wait for processing worker (Whisper can take up to 30s on RPi5)
+        if self._processing_thread and self._processing_thread.is_alive():
+            self._processing_thread.join(timeout=35.0)
+            if self._processing_thread.is_alive():
+                print("⚠️  Processing thread did not exit cleanly")
 
         # Now it's safe to close the audio stream
         if self.stream:
@@ -249,6 +262,7 @@ class WhisperSTT:
         """Resume audio recording"""
         if self.is_paused:
             self.is_paused = False
+            self._is_processing = False  # Safety reset — ensure VAD gate is open
             # Clear any accumulated frames during pause
             self.audio_frames = []
             self.is_recording = False
@@ -256,7 +270,12 @@ class WhisperSTT:
                 print("▶️  Recording resumed")
 
     def _recording_loop(self):
-        """Main recording loop with VAD"""
+        """Main recording loop with VAD.
+
+        ALWAYS reads from stream regardless of paused/processing state to prevent
+        ALSA buffer overflow. When paused or processing, data is read and discarded.
+        Whisper CLI is offloaded to _processing_worker so this loop never blocks.
+        """
         print("👂 Listening for speech...")
         if self.debug_mode:
             print(f"🔧 Debug mode enabled - Threshold: {self.silence_threshold}")
@@ -264,27 +283,28 @@ class WhisperSTT:
 
         while self.is_running:
             try:
-                # Skip processing if recording is paused (e.g., chatbot is speaking)
-                if self.is_paused:
-                    time.sleep(0.1)  # Avoid busy-waiting
+                # ALWAYS read from stream — prevents ALSA buffer overflow
+                # regardless of paused/processing state
+                audio_data = self.stream.read(self.config.chunk_size, exception_on_overflow=False)
+
+                # Not user's turn — drain buffer and discard
+                if self.is_paused or self._is_processing:
                     continue
 
-                # Read audio chunk
-                audio_data = self.stream.read(self.config.chunk_size, exception_on_overflow=False)
+                # --- VAD logic ---
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
                 # Calculate RMS (volume level) with NaN protection
-                # If audio buffer is corrupted, treat as silence
                 try:
                     rms_squared = np.mean(audio_array.astype(np.float64)**2)
                     if np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0:
                         print(f"⚠️  Corrupted audio buffer detected (NaN/Inf values) - treating as silence")
-                        rms = 0.0  # Treat corrupted audio as silence
+                        rms = 0.0
                     else:
                         rms = np.sqrt(rms_squared)
                 except (ValueError, RuntimeWarning):
                     print(f"⚠️  Audio processing error - treating as silence")
-                    rms = 0.0  # Treat errors as silence
+                    rms = 0.0
 
                 # Debug output - show RMS levels periodically
                 current_time = time.time()
@@ -300,7 +320,6 @@ class WhisperSTT:
                         print("🗣️  Speech detected, recording...")
                         self.is_recording = True
                         self.audio_frames = []
-                        # Notify callback that speech started
                         if self.on_speech_detected:
                             try:
                                 self.on_speech_detected()
@@ -314,65 +333,94 @@ class WhisperSTT:
                     # Silence detected while recording
                     silence_duration = time.time() - self.last_audio_time
 
-                    # Still add frames during short silence
                     if silence_duration < self.silence_duration_limit:
+                        # Short silence — keep accumulating
                         self.audio_frames.append(audio_data)
                     else:
-                        # Long enough silence - process the audio
+                        # Long enough silence — hand off to worker immediately
                         print(f"🤐 Silence detected ({silence_duration:.1f}s), processing...")
-                        self._process_recorded_audio()
-                        self.is_recording = False
-                        self.audio_frames = []
+                        frames = self.audio_frames
+                        self.audio_frames = []      # reset buffer immediately
+                        self.is_recording = False   # reset VAD state immediately
+                        self._is_processing = True  # close VAD gate before queuing
+                        try:
+                            self._processing_queue.put_nowait(frames)
+                        except queue.Full:
+                            # Shouldn't happen since _is_processing gates this
+                            print("⚠️  Processing queue full, discarding audio")
+                            self._is_processing = False
 
+            except OSError as e:
+                # Recoverable ALSA errors (underrun, device busy) — log and continue
+                if self.is_running:
+                    print(f"⚠️  Audio read error (recovering): {e}")
+                time.sleep(0.01)
+                continue
             except Exception as e:
-                if self.is_running:  # Only log if not intentionally stopped
-                    print(f"❌ Error in recording loop: {e}")
+                if self.is_running:
+                    print(f"❌ Fatal error in recording loop: {e}")
                 break
 
-    def _process_recorded_audio(self):
-        """Process the recorded audio with whisper CLI"""
-        if not self.audio_frames:
+    def _processing_worker(self):
+        """Worker thread: runs Whisper CLI without blocking the recording loop."""
+        while self.is_running:
+            try:
+                frames = self._processing_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                self._process_recorded_audio(frames)
+            except Exception as e:
+                print(f"❌ Error in processing worker: {e}")
+            finally:
+                self._is_processing = False  # Always reopen VAD gate, even on error
+
+    def _process_recorded_audio(self, frames: list):
+        """Process the recorded audio frames with whisper CLI.
+
+        Called from _processing_worker (not the recording loop) so blocking here
+        for 5-15s is safe — the recording loop continues draining the ALSA buffer.
+        """
+        if not frames:
             return
 
         # Use actual sample rate (which may differ from config if device doesn't support it)
         actual_rate = getattr(self, '_actual_sample_rate', self.config.sample_rate)
 
         # Check minimum duration
-        duration = len(self.audio_frames) * self.config.chunk_size / actual_rate
+        duration = len(frames) * self.config.chunk_size / actual_rate
         if duration < self.min_audio_length:
             print(f"⏭️  Audio too short ({duration:.1f}s), skipping...")
             return
 
-        with self.processing_lock:
-            try:
-                # Save audio to temp WAV file
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
-                    temp_path = temp_audio.name
+        try:
+            # Save audio to temp WAV file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+                temp_path = temp_audio.name
 
-                    # Write WAV file
-                    with wave.open(temp_path, 'wb') as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
-                        wf.setframerate(actual_rate)
-                        wf.writeframes(b''.join(self.audio_frames))
+                with wave.open(temp_path, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
+                    wf.setframerate(actual_rate)
+                    wf.writeframes(b''.join(frames))
 
-                print(f"💾 Audio saved ({duration:.1f}s), transcribing...")
+            print(f"💾 Audio saved ({duration:.1f}s), transcribing...")
 
-                # Run whisper CLI
-                transcription = self._transcribe_audio_file(temp_path)
+            # Run whisper CLI (blocking, but we're in the worker thread)
+            transcription = self._transcribe_audio_file(temp_path)
 
-                # Cleanup temp file
-                Path(temp_path).unlink(missing_ok=True)
+            # Cleanup temp file
+            Path(temp_path).unlink(missing_ok=True)
 
-                if transcription:
-                    print(f"✅ Transcription: {transcription}")
+            if transcription:
+                print(f"✅ Transcription: {transcription}")
 
-                    # Trigger callback
-                    if self.callback:
-                        self.callback(transcription)
+                if self.callback:
+                    self.callback(transcription)
 
-            except Exception as e:
-                print(f"❌ Error processing audio: {e}")
+        except Exception as e:
+            print(f"❌ Error processing audio: {e}")
 
     def _transcribe_audio_file(self, audio_path: str) -> Optional[str]:
         """Transcribe audio file using whisper CLI"""
