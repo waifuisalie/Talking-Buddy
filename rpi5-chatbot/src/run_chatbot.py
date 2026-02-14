@@ -23,7 +23,7 @@ import esp32_wake_listener
 import audio_device_detector
 import personality_manager
 
-def create_custom_config(model_name=None, language="pt", interaction_mode="smart",
+def create_custom_config(model_name=None, language="pt", interaction_mode="conversation",
                         input_device=None, output_device=None, personality=None, base_model=None,
                         tts_engine="piper"):
     """Create a custom configuration if needed
@@ -31,7 +31,7 @@ def create_custom_config(model_name=None, language="pt", interaction_mode="smart
     Args:
         model_name: Model name (e.g., "qwen2.5:1.5b", "gemma3:1b", "llama3.2:1b")
         language: Response language: "pt", "en", or "es" (default: "pt")
-        interaction_mode: "single-shot", "conversation", or "smart" (default)
+        interaction_mode: "single-shot" or "conversation" (default)
         input_device: Override input device (name pattern or index)
         output_device: Override output device (name pattern or index)
         personality: Personality ID (e.g., "casual", "formal", "humorous")
@@ -89,8 +89,7 @@ def create_custom_config(model_name=None, language="pt", interaction_mode="smart
     chatbot_config.conversation.interaction_mode = interaction_mode
     mode_descriptions = {
         "single-shot": "Single-shot (Alexa-style, best battery)",
-        "conversation": "Continuous conversation (original behavior)",
-        "smart": "Smart hybrid (continues on questions)"
+        "conversation": "Continuous conversation (wake word → chat until timeout/goodbye)"
     }
     print(f"💬 Interaction Mode: {mode_descriptions.get(interaction_mode, interaction_mode)}")
 
@@ -222,9 +221,9 @@ def main():
     parser.add_argument(
         "--interaction-mode",
         type=str,
-        choices=["single-shot", "conversation", "smart"],
-        default="smart",
-        help="Interaction mode (default: smart). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat, 'smart' for hybrid (continues if AI asks question)"
+        choices=["single-shot", "conversation"],
+        default="conversation",
+        help="Interaction mode (default: conversation). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat until timeout/goodbye"
     )
 
     # Audio device arguments

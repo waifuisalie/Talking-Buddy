@@ -116,12 +116,8 @@ class ConversationConfig:
 
     # Interaction mode: How the assistant handles multi-turn conversations
     # - "single-shot": Wake word → One Q&A → Sleep (Alexa-style, best battery)
-    # - "conversation": Wake word → Continuous conversation → Manual dismissal/timeout (current behavior)
-    # - "smart": Single-shot by default, but continues if LLM asks a question (hybrid)
-    interaction_mode: str = "smart"
-
-    # For "smart" mode: How long to wait for follow-up after LLM asks a question
-    smart_mode_followup_timeout: float = 10.0  # seconds
+    # - "conversation": Wake word → Continuous conversation → Manual dismissal/timeout
+    interaction_mode: str = "conversation"
 
     # Streaming configuration (NEW)
     use_streaming: bool = True  # Enable streaming LLM + incremental TTS (default: enabled)

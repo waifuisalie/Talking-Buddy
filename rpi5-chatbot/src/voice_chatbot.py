@@ -739,45 +739,13 @@ class VoiceChatbot:
             print("💤 Single-shot mode: Entering light sleep")
             self._enter_light_sleep()
 
-        elif interaction_mode == "conversation":
-            # Always continue listening (original behavior)
+        else:
+            # Conversation mode (default): keep listening after response
             if self.whisper_stt:
                 self.whisper_stt.resume_recording()
             self.state_manager.set_state("listening")
             # Start conversation timeout (30s)
             self.timeout_manager.start_conversation_timer()
-
-        elif interaction_mode == "smart":
-            # Continue only if AI asks a question
-            if self._response_invites_continuation(response_text):
-                print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
-                if self.whisper_stt:
-                    self.whisper_stt.resume_recording()
-                self.state_manager.set_state("listening")
-                # Use shorter timeout for follow-ups
-                self.timeout_manager.start_conversation_timer(
-                    timeout=self.config.conversation.smart_mode_followup_timeout
-                )
-            else:
-                print("💤 Smart mode: Response complete, entering light sleep")
-                self._enter_light_sleep()
-
-        else:
-            # Unknown mode, default to conversation mode
-            print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
-            if self.whisper_stt:
-                self.whisper_stt.resume_recording()
-            self.state_manager.set_state("listening")
-            self.timeout_manager.start_conversation_timer()
-
-    def _response_invites_continuation(self, response_text: str) -> bool:
-        """
-        Check if the AI response invites continuation (asks a question)
-        Used for "smart" interaction mode
-
-        Simply checks if the response ends with a question mark
-        """
-        return response_text.strip().endswith('?')
 
     def _play_response(self, audio_file: str, response_text: str):
         """Play the AI response"""
@@ -807,35 +775,12 @@ class VoiceChatbot:
                 print("💤 Single-shot mode: Entering light sleep")
                 self._enter_light_sleep()
 
-            elif interaction_mode == "conversation":
-                # Always continue listening (original behavior)
+            else:
+                # Conversation mode (default): keep listening after response
                 if self.whisper_stt:
                     self.whisper_stt.resume_recording()
                 self.state_manager.set_state("listening")
                 # Start conversation timeout (30s)
-                self.timeout_manager.start_conversation_timer()
-
-            elif interaction_mode == "smart":
-                # Continue only if AI asks a question
-                if self._response_invites_continuation(response_text):
-                    print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
-                    if self.whisper_stt:
-                        self.whisper_stt.resume_recording()
-                    self.state_manager.set_state("listening")
-                    # Use shorter timeout for follow-ups
-                    self.timeout_manager.start_conversation_timer(
-                        timeout=self.config.conversation.smart_mode_followup_timeout
-                    )
-                else:
-                    print("💤 Smart mode: Response complete, entering light sleep")
-                    self._enter_light_sleep()
-
-            else:
-                # Unknown mode, default to conversation mode
-                print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
-                if self.whisper_stt:
-                    self.whisper_stt.resume_recording()
-                self.state_manager.set_state("listening")
                 self.timeout_manager.start_conversation_timer()
 
         print(f"🤖 Assistant: {response_text}")

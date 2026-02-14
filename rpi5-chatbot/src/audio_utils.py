@@ -392,8 +392,11 @@ class AudioPlayer:
 
                         # Give a brief grace period for final verification
                         time.sleep(0.2)
-                        # Double-check conditions after grace period
-                        if (self.played_count >= self.enqueued_count and
+                        # Double-check ALL conditions after grace period
+                        # (generation_complete must be re-checked to prevent race
+                        # where start_queue_playback() resets it between checks)
+                        if (self.generation_complete and
+                            self.played_count >= self.enqueued_count and
                             self.playback_queue.empty() and
                             self.on_queue_complete):
                             try:
