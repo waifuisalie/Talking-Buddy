@@ -19,6 +19,7 @@ import wave
 import tempfile
 import time
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Optional, Callable
 import numpy as np
@@ -205,6 +206,17 @@ class WhisperSTT:
 
             self.is_running = True
             self.is_paused = False  # Ensure not paused on start
+            self.is_recording = False  # Reset VAD state from previous session
+            self.audio_frames = []  # Clear stale audio data
+            self._is_processing = False  # Reopen VAD gate
+            self.last_audio_time = 0  # Reset silence timer baseline
+
+            # RMS smoothing window — filters transient noise spikes that defeat
+            # silence detection, especially at high native sample rates (44100 Hz)
+            # where each chunk is only ~23ms and noise can randomly exceed threshold.
+            chunks_per_second = actual_sample_rate / self.config.chunk_size
+            self._rms_window_size = max(3, int(0.2 * chunks_per_second))  # ~0.2s window
+            self._rms_history = deque(maxlen=self._rms_window_size)
 
             # Start recording thread
             self.recording_thread = threading.Thread(target=self._recording_loop, daemon=True, name="WhisperRecording")
@@ -266,6 +278,8 @@ class WhisperSTT:
             # Clear any accumulated frames during pause
             self.audio_frames = []
             self.is_recording = False
+            if hasattr(self, '_rms_history'):
+                self._rms_history.clear()  # Fresh smoothing window after pause
             if self.debug_mode:
                 print("▶️  Recording resumed")
 
@@ -294,23 +308,26 @@ class WhisperSTT:
                 # --- VAD logic ---
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
-                # Calculate RMS (volume level) with NaN protection
+                # Calculate instant RMS (volume level) with NaN protection
                 try:
                     rms_squared = np.mean(audio_array.astype(np.float64)**2)
                     if np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0:
-                        print(f"⚠️  Corrupted audio buffer detected (NaN/Inf values) - treating as silence")
-                        rms = 0.0
+                        rms_instant = 0.0
                     else:
-                        rms = np.sqrt(rms_squared)
+                        rms_instant = np.sqrt(rms_squared)
                 except (ValueError, RuntimeWarning):
-                    print(f"⚠️  Audio processing error - treating as silence")
-                    rms = 0.0
+                    rms_instant = 0.0
+
+                # Smoothed RMS — rolling average filters transient noise spikes
+                # that otherwise reset the silence timer every few ms at 44100 Hz.
+                self._rms_history.append(rms_instant)
+                rms = sum(self._rms_history) / len(self._rms_history)
 
                 # Debug output - show RMS levels periodically
                 current_time = time.time()
                 if self.debug_mode and (current_time - self.last_debug_time) >= self.debug_interval:
                     status = "🗣️ SPEECH" if rms > self.silence_threshold else "🤫 silence"
-                    print(f"🔊 RMS: {rms:6.1f} | Threshold: {self.silence_threshold} | {status}")
+                    print(f"🔊 RMS: {rms:6.1f} (raw {rms_instant:5.0f}) | Threshold: {self.silence_threshold} | {status}")
                     self.last_debug_time = current_time
 
                 # Voice Activity Detection
