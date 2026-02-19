@@ -6,6 +6,8 @@ Reproduz áudio via ALSA (P2 ou pinout)
 import pygame
 import os
 import time
+import queue
+import threading
 from pathlib import Path
 from typing import Optional, Callable
 from .voice_config import VoiceConfig
@@ -18,6 +20,17 @@ class HardwareAudioPlayer:
         self.config = config
         self.is_playing = False
         self._use_aplay_fallback = False  # Flag para usar aplay se pygame falhar
+
+        # Queue-based playback (for streaming TTS)
+        self.playback_queue = queue.Queue()
+        self.queue_thread = None
+        self.is_queue_active = False
+        self.generation_complete = False
+        self.enqueued_count = 0
+        self.played_count = 0
+        self.on_chunk_start = None      # callback(metadata) when chunk starts playing
+        self.on_queue_complete = None    # callback() when all chunks done
+
         self._initialize_pygame()
     
     def _initialize_pygame(self):
@@ -184,9 +197,144 @@ class HardwareAudioPlayer:
         # Se temos aplay como fallback, sempre disponível
         if self._use_aplay_fallback:
             return True
-        
+
         # Verifica pygame
         try:
             return pygame.mixer.get_init() is not None
         except:
             return False
+
+    # ========== Queue-based playback (for streaming TTS) ==========
+
+    def enqueue_audio(self, audio_file: str, metadata: dict = None):
+        """
+        Add an audio file to the playback queue (non-blocking)
+
+        Args:
+            audio_file: Path to the audio file
+            metadata: Optional metadata dict (e.g., {"text": "...", "cleanup": True})
+        """
+        if metadata is None:
+            metadata = {}
+
+        self.playback_queue.put({
+            "file": audio_file,
+            "metadata": metadata
+        })
+        self.enqueued_count += 1
+
+    def start_queue_playback(self):
+        """Start background thread to process queue"""
+        self.generation_complete = False
+        self.enqueued_count = 0
+        self.played_count = 0
+
+        if not self.is_queue_active:
+            self.is_queue_active = True
+            self.queue_thread = threading.Thread(
+                target=self._queue_processor_thread,
+                daemon=True,
+                name="AudioQueueProcessor"
+            )
+            self.queue_thread.start()
+            print("🎵 Audio queue playback started")
+        else:
+            print("ℹ️  Queue already active, counters reset for new session")
+
+    def stop_queue_playback(self, clear_queue: bool = True):
+        """Stop queue playback and cleanup"""
+        if self.is_queue_active:
+            self.is_queue_active = False
+
+            if clear_queue:
+                while not self.playback_queue.empty():
+                    try:
+                        item = self.playback_queue.get_nowait()
+                        if item["metadata"].get("cleanup", False):
+                            try:
+                                Path(item["file"]).unlink(missing_ok=True)
+                            except Exception as e:
+                                print(f"❌ Error cleaning up queued file: {e}")
+                    except queue.Empty:
+                        break
+
+            self.stop()
+
+            if self.queue_thread and self.queue_thread.is_alive():
+                if threading.current_thread() != self.queue_thread:
+                    self.queue_thread.join(timeout=2.0)
+
+            print("🛑 Audio queue playback stopped")
+
+    def signal_generation_complete(self):
+        """Signal that LLM generation is complete — queue will finish remaining items"""
+        self.generation_complete = True
+
+    def _queue_processor_thread(self):
+        """Background worker that plays files sequentially from queue"""
+        try:
+            while self.is_queue_active:
+                try:
+                    item = self.playback_queue.get(timeout=0.5)
+
+                    audio_file = item["file"]
+                    metadata = item["metadata"]
+
+                    if not Path(audio_file).exists():
+                        print(f"❌ Queued audio file not found: {audio_file}")
+                        continue
+
+                    # Call on_chunk_start callback
+                    if self.on_chunk_start:
+                        try:
+                            self.on_chunk_start(metadata)
+                        except Exception as e:
+                            print(f"❌ Error in on_chunk_start callback: {e}")
+
+                    # Play audio blocking
+                    self.play(audio_file, blocking=True)
+
+                    self.played_count += 1
+
+                    # Cleanup temp file if requested
+                    if metadata.get("cleanup", False):
+                        try:
+                            Path(audio_file).unlink(missing_ok=True)
+                        except Exception as e:
+                            print(f"❌ Error cleaning up audio file: {e}")
+
+                except queue.Empty:
+                    # Check if all done
+                    if (self.is_queue_active and
+                        self.generation_complete and
+                        self.played_count >= self.enqueued_count and
+                        self.playback_queue.empty()):
+
+                        time.sleep(0.2)
+                        if (self.generation_complete and
+                            self.played_count >= self.enqueued_count and
+                            self.playback_queue.empty() and
+                            self.on_queue_complete):
+                            try:
+                                print(f"🎵 Queue complete: played {self.played_count}/{self.enqueued_count} items")
+                                self.on_queue_complete()
+                            except Exception as e:
+                                print(f"❌ Error in on_queue_complete callback: {e}")
+                            self.on_queue_complete = None
+                    continue
+
+                except Exception as e:
+                    print(f"❌ Error processing queue item: {e}")
+
+        finally:
+            self.is_queue_active = False
+            self.is_playing = False
+            print("✅ Queue processor thread exited")
+
+    def is_queue_empty(self) -> bool:
+        """Check if playback queue is empty"""
+        return self.playback_queue.empty()
+
+    def get_queue_size(self) -> int:
+        """Get number of items in playback queue"""
+        return self.playback_queue.qsize()
