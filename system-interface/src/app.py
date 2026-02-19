@@ -1,0 +1,1444 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Sistema de Cadastro de Usuários RFID - Servidor Web
+Interface touch otimizada para tela sensível ao toque
+"""
+
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, send_from_directory
+from functools import wraps
+from datetime import datetime
+import os
+import time
+import subprocess
+import sys
+import secrets
+import threading
+import fcntl  # 🔥 OTIMIZAÇÃO: File locking para RFID
+from dotenv import load_dotenv
+
+# Carrega variáveis de ambiente do .env
+load_dotenv()
+
+# Adiciona o diretório pai ao path para imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
+
+# Adiciona rpi5-chatbot/src ao path para usar módulos existentes (Whisper STT)
+rpi5_chatbot_src = os.path.join(os.path.dirname(parent_dir), 'rpi5-chatbot', 'src')
+sys.path.insert(0, rpi5_chatbot_src)
+
+from database import Database, RESPONSE_STYLES, GENDERS, LANGUAGES
+import atexit
+
+# Importa módulo de voz
+try:
+    from voice_assistant import VoiceConfig, OllamaClient, TTSClient, HardwareAudioPlayer, ConversationHistory
+    VOICE_ENABLED = True
+    print("✅ Módulo de voz carregado")
+except ImportError as e:
+    VOICE_ENABLED = False
+    print(f"⚠️  Módulo de voz desabilitado: {e}")
+
+# Importa gerenciador de wake word ESP32
+try:
+    from esp32_manager import ESP32Manager
+    ESP32_AVAILABLE = True
+except ImportError as e:
+    ESP32_AVAILABLE = False
+    print(f"⚠️  ESP32Manager não disponível: {e}")
+
+WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
+
+# Inicialização do Flask
+app = Flask(__name__, 
+            template_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates'),
+            static_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static'))
+app.secret_key = secrets.token_hex(32)
+
+# Configuração do banco de dados (na raiz do projeto)
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assistant.db')
+
+# Controle do processo do leitor RFID
+rfid_process = None
+RFID_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'last_rfid.txt')
+
+# Verifica se o banco existe
+if not os.path.exists(DB_PATH):
+    print("=" * 70)
+    print("⚠️  BANCO DE DADOS NÃO ENCONTRADO!")
+    print("=" * 70)
+    print()
+    print("Execute primeiro o script de inicialização:")
+    print("  python3 init_system.py")
+    print()
+    print("Ou crie manualmente:")
+    print("  python3 -c 'from database import Database; db = Database(\"assistant.db\"); db.upsert_admin(\"admin\", \"senha123\"); db.close()'")
+    print()
+    print("=" * 70)
+    import sys
+    sys.exit(1)
+
+
+# ========== GERENCIAMENTO DE BANCO (THREAD-SAFE) ==========
+
+def get_db():
+    """Obtém conexão do banco para a requisição atual (thread-safe)"""
+    if 'db' not in g:
+        g.db = Database(DB_PATH)
+    return g.db
+
+
+@app.teardown_appcontext
+def close_db(error):
+    """Fecha conexão do banco ao fim da requisição"""
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
+
+def cleanup_rfid_process():
+    """Para o processo do leitor RFID se estiver rodando"""
+    global rfid_process
+    if rfid_process and rfid_process.poll() is None:
+        try:
+            rfid_process.terminate()
+            rfid_process.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def killall_rfid_processes():
+    """🔥 CRÍTICO: Mata TODOS os processos RFID para evitar conflitos de hardware"""
+    try:
+        print("[RFID Killall] 🔍 Procurando processos rfid_manager.py...", flush=True)
+        
+        # Método 1: pkill (mais rápido e seguro)
+        try:
+            result = subprocess.run(
+                ['sudo', 'pkill', '-9', '-f', 'rfid_manager.py'],
+                timeout=5,
+                check=False,
+                capture_output=True
+            )
+            print(f"[RFID Killall] pkill executado (retorno: {result.returncode})", flush=True)
+        except Exception as e:
+            print(f"[RFID Killall] ⚠️  pkill falhou: {e}", flush=True)
+        
+        # Método 2: ps + grep + kill (backup para garantir)
+        try:
+            result = subprocess.run(
+                ['ps', 'aux'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            killed_count = 0
+            for line in result.stdout.split('\n'):
+                if 'rfid_manager.py' in line and 'grep' not in line and 'sudo' not in line:
+                    parts = line.split()
+                    if len(parts) > 1:
+                        pid = parts[1]
+                        try:
+                            subprocess.run(['sudo', 'kill', '-9', pid], timeout=2, check=False)
+                            killed_count += 1
+                            print(f"[RFID Killall] ⚔️  Matou PID {pid}", flush=True)
+                        except:
+                            pass
+            
+            if killed_count > 0:
+                print(f"[RFID Killall] ✅ Total: {killed_count} processo(s) encerrado(s)", flush=True)
+            else:
+                print("[RFID Killall] ℹ️  Nenhum processo encontrado", flush=True)
+                
+        except Exception as e:
+            print(f"[RFID Killall] ⚠️  Método backup falhou: {e}", flush=True)
+        
+        # Aguardar processos morrerem completamente
+        time.sleep(0.5)
+        print("[RFID Killall] ✅ Limpeza concluída", flush=True)
+        
+    except Exception as e:
+        print(f"[RFID Killall] ❌ ERRO: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
+
+def cleanup_wake_word_manager():
+    """Para o gerenciador de wake word se estiver rodando"""
+    global wake_word_manager
+    if wake_word_manager:
+        try:
+            wake_word_manager.stop()
+        except Exception:
+            pass
+
+import atexit
+
+# Registra limpeza ao encerrar
+atexit.register(cleanup_rfid_process)
+atexit.register(cleanup_wake_word_manager)
+
+# 🔥 KILLALL de processos RFID ao iniciar servidor (previne processos órfãos)
+print("\n" + "="*60)
+print("🚀 INICIANDO SERVIDOR - Limpando processos RFID órfãos...")
+print("="*60 + "\n")
+killall_rfid_processes()
+print()
+
+
+# ========== VOICE ASSISTANT INITIALIZATION ==========
+
+voice_config = None
+ollama_client = None
+tts_client = None
+audio_player = None
+whisper_stt = None  # Whisper STT (reconhecimento de voz)
+
+# Wake Word Manager (pode ser ESP32Manager ou LocalWakeWordDetector)
+wake_word_manager = None
+
+if VOICE_ENABLED:
+    try:
+        voice_config = VoiceConfig.from_env()
+        
+        # DETECTAR AUTOMATICAMENTE DISPOSITIVO DE ÁUDIO USB
+        print("\n🔊 Detectando dispositivo de áudio...")
+        voice_config.auto_detect_audio_device()
+        
+        is_valid, errors = voice_config.validate()
+        
+        if is_valid:
+            ollama_client = OllamaClient(voice_config)
+            tts_client = TTSClient(voice_config)
+            
+            # Inicializa Audio Player APENAS no processo reloader (evita device busy)
+            import os
+            if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+                # Processo reloader - OK para inicializar pygame
+                audio_player = HardwareAudioPlayer(voice_config)
+            else:
+                print("ℹ️ [AudioPlayer] Aguardando processo reloader...")
+            
+            # Inicializa Whisper STT se habilitado
+            if voice_config.whisper_enabled:
+                try:
+                    # Importa módulos do rpi5-chatbot
+                    from whisper_stt import WhisperSTT
+                    import config as rpi5_config
+                    
+                    # Cria configuração compatível
+                    whisper_config = rpi5_config.WhisperConfig()
+                    whisper_config.capture_device_name = voice_config.microphone_device
+                    whisper_config.model_path = os.path.join(voice_config.whisper_model_path, voice_config.whisper_model)
+                    whisper_config.cli_binary = voice_config.whisper_binary
+                    whisper_config.language = voice_config.whisper_language
+                    whisper_config.threads = voice_config.whisper_threads
+                    whisper_config.silence_threshold = voice_config.silence_threshold
+                    whisper_config.silence_duration = voice_config.silence_duration
+                    whisper_config.min_audio_length = voice_config.min_audio_length
+                    whisper_config.debug_mode = False  # Desabilita debug em produção
+                    
+                    # Cria instância do Whisper STT (sem callbacks ainda)
+                    whisper_stt = WhisperSTT(whisper_config, callback=None)
+                    
+                    print("✅ Whisper STT carregado (inativo - ativa sob demanda)")
+                    
+                except Exception as e:
+                    print(f"⚠️  Whisper STT não disponível: {e}")
+                    whisper_stt = None
+            
+            print("✅ Sistema de voz inicializado")
+            
+            # Pré-carrega modelo Ollama em background (primeira carga é lenta)
+            print("")
+            print("=" * 70)
+            print("PRÉ-CARREGANDO SISTEMA DE VOZ")
+            print("=" * 70)
+            
+            # Warmup Ollama
+            print("\n1️⃣  Carregando modelo de IA...")
+            if ollama_client.warmup():
+                print("   ✅ Modelo de IA carregado e pronto")
+            else:
+                print("   ⚠️  Warmup Ollama falhou - primeira resposta pode ser lenta")
+            
+            # Warmup TTS
+            print("\n2️⃣  Testando sintetizador de voz...")
+            if tts_client.warmup():
+                print("   ✅ Sintetizador de voz funcionando")
+            else:
+                print("   ⚠️  Warmup TTS falhou - áudio pode não funcionar")
+            
+            print("\n" + "=" * 70)
+            print("✅ SISTEMA PRONTO PARA USO!")
+            print("=" * 70)
+            print("")
+        else:
+            print("⚠️  Erros na configuração de voz:")
+            for error in errors:
+                print(f"   - {error}")
+            print("   Sistema funcionará apenas com texto")
+    except Exception as e:
+        print(f"⚠️  Erro ao inicializar voz: {e}")
+        print("   Sistema funcionará apenas com texto")
+
+
+# ========== WAKE WORD INITIALIZATION (ESP32) ==========
+
+if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    if WAKE_WORD_ENABLED and ESP32_AVAILABLE:
+        try:
+            print("\n" + "=" * 70)
+            print("INICIALIZANDO ESP32 WAKE WORD DETECTION")
+            print("=" * 70)
+            
+            # Configurações do .env
+            esp32_baud = int(os.getenv('ESP32_BAUD_RATE', '115200'))
+            esp32_reconnect = int(os.getenv('ESP32_RECONNECT_INTERVAL', '5'))
+            esp32_debounce = float(os.getenv('WAKE_WORD_DEBOUNCE_TIME', '2.0'))
+            
+            # Callback quando wake word detectado
+            def on_wake_word():
+                print("🔔 [CALLBACK] Wake word detectado no ESP32!")
+            
+            # Criar instância do ESP32Manager
+            wake_word_manager = ESP32Manager(
+                baud_rate=esp32_baud,
+                reconnect_interval=esp32_reconnect,
+                debounce_time=esp32_debounce
+            )
+            
+            wake_word_manager.register_wake_callback(on_wake_word)
+            wake_word_manager.start()
+            
+            print("✅ ESP32 Wake Word Manager ativado")
+            print("=" * 70)
+            print()
+            
+        except Exception as e:
+            print(f"⚠️  Erro ao inicializar ESP32: {e}")
+            print("   Sistema funcionará sem wake word detection")
+            wake_word_manager = None
+    
+    elif not WAKE_WORD_ENABLED:
+        print("\nℹ️  Wake Word desabilitado (.env: WAKE_WORD_ENABLED=false)")
+        wake_word_manager = None
+    
+    else:
+        print(f"\n⚠️  ESP32 não disponível")
+        print(f"   Instale pyserial: pip install pyserial")
+        wake_word_manager = None
+
+else:
+    print("\nℹ️  Wake Word aguardando processo reloader...")
+
+
+# Verifica se tem admin (usando conexão temporária)
+temp_db = Database(DB_PATH)
+if not temp_db.has_any_admin():
+    temp_db.close()
+    print("=" * 70)
+    print("⚠️  NENHUM ADMINISTRADOR CONFIGURADO!")
+    print("=" * 70)
+    print()
+    print("Execute o script de inicialização:")
+    print("  python3 init_system.py")
+    print()
+    print("=" * 70)
+    import sys
+    sys.exit(1)
+temp_db.close()
+
+
+# ========== DECORATORS ==========
+
+def login_required(f):
+    """Decorator para proteger rotas que exigem autenticação"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'admin_logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# ========== ROTAS DE AUTENTICAÇÃO ==========
+
+@app.route('/favicon.ico')
+def favicon():
+    """Retorna 204 No Content para favicon"""
+    return '', 204
+
+
+@app.route('/')
+def index():
+    """Página principal - Robô de chat"""
+    return render_template('robot_chat.html')
+
+
+@app.route('/test-rfid')
+def test_rfid():
+    """Página de teste de RFID"""
+    return app.send_static_file('../test_rfid.html')
+
+
+@app.route('/admin')
+def admin_index():
+    """Redireciona para login ou menu de usuários (antiga rota /)""" 
+    if 'admin_logged_in' in session:
+        return redirect(url_for('menu_usuarios'))
+    return redirect(url_for('login'))
+
+
+# ========== ROTAS DE API - CHAT ==========
+
+@app.route('/api/user/profile/<rfid>', methods=['GET'])
+def get_user_profile_by_rfid(rfid):
+    """Retorna perfil do usuário por RFID (para chat)"""
+    user = get_db().get_user_by_rfid(rfid)
+    
+    if user:
+        return jsonify({
+            'success': True,
+            'user': {
+                'id': user['id'],
+                'name': user['name'],
+                'response_style': user['response_style'],
+                'persona_gender': user['persona_gender'],
+                'language': user['language']
+            }
+        })
+    
+    return jsonify({
+        'success': False,
+        'message': 'Usuário não encontrado'
+    }), 404
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Tela de login do administrador"""
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        # Validação básica
+        if not username or not password:
+            return render_template('login.html', error='Preencha todos os campos!')
+        
+        # Verificar credenciais
+        if get_db().verify_admin(username, password):
+            # Login bem-sucedido
+            session.clear()
+            session['admin_logged_in'] = True
+            session['admin_username'] = username
+            return redirect(url_for('menu_usuarios'))
+        else:
+            # Login falhou
+            return render_template('login.html', 
+                                 error='Usuário ou senha inválidos!')
+    
+    return render_template('login.html')
+
+
+@app.route('/logout', methods=['GET'])
+@login_required
+def confirmar_logout():
+    """Tela de confirmação de logout"""
+    return render_template('confirmar_logout.html')
+
+
+@app.route('/logout/confirmar', methods=['POST'])
+def logout():
+    """Logout do sistema"""
+    session.clear()
+    return redirect(url_for('index'))
+
+
+@app.route('/admin/alterar-senha', methods=['GET', 'POST'])
+@login_required
+def alterar_senha():
+    """Tela para alterar senha do administrador"""
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '').strip()
+        confirm_password = request.form.get('confirm_password', '').strip()
+        
+        # Validações
+        if not new_password or not confirm_password:
+            return render_template('alterar_senha.html', 
+                                 error='Preencha todos os campos!')
+        
+        if len(new_password) < 6:
+            return render_template('alterar_senha.html', 
+                                 error='A nova senha deve ter pelo menos 6 caracteres!')
+        
+        if new_password != confirm_password:
+            return render_template('alterar_senha.html', 
+                                 error='As senhas não coincidem!')
+        
+        # Alterar senha
+        username = session.get('admin_username')
+        get_db().upsert_admin(username, new_password)
+        
+        return render_template('alterar_senha.html', 
+                             success='Senha alterada com sucesso!')
+    
+    return render_template('alterar_senha.html')
+
+
+# ========== ROTAS PRINCIPAIS ==========
+
+@app.route('/usuarios')
+@login_required
+def menu_usuarios():
+    """Menu de gerenciamento de usuários"""
+    return render_template('menu_usuarios.html')
+
+
+@app.route('/usuarios/lista')
+@login_required
+def lista_usuarios():
+    """Lista todos os usuários"""
+    usuarios = get_db().list_users()
+    return render_template('lista_usuarios.html', users=usuarios)
+
+
+@app.route('/usuarios/aguardar-rfid')
+@login_required
+def aguardar_rfid():
+    """Tela de aguardar leitura do RFID"""
+    return render_template('aguardar_rfid.html')
+
+
+@app.route('/usuarios/rfid/start', methods=['POST'])
+def rfid_start():
+    """Inicia o processo do leitor RFID"""
+    global rfid_process
+    
+    try:
+        # 🔥 CRÍTICO: Matar TODOS os processos RFID primeiro
+        print("\n[RFID Start] 🧹 Limpando processos anteriores...")
+        killall_rfid_processes()
+        
+        # Resetar variável global
+        rfid_process = None
+        
+        # Garantir que o arquivo existe e está limpo
+        os.makedirs(os.path.dirname(RFID_FILE), exist_ok=True)
+        with open(RFID_FILE, 'w') as f:
+            f.write('')
+        print("[RFID Start] 📄 Arquivo RFID limpo")
+        
+        # Verificar se o script existe
+        script_path = os.path.join(os.path.dirname(__file__), 'rfid_manager.py')
+        if not os.path.exists(script_path):
+            error_msg = f"Script RFID não encontrado: {script_path}"
+            print(f"[RFID Start] ❌ ERRO: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg})
+        
+        # Inicia novo processo COM SUDO (essencial para acesso GPIO)
+        env = os.environ.copy()
+        
+        print(f"[RFID Start] 🚀 Iniciando novo processo: {script_path}")
+        rfid_process = subprocess.Popen(
+            ['sudo', '/usr/bin/python3', script_path],
+            stdout=None,  # ← Mostra logs em tempo real
+            stderr=None,  # ← Mostra erros em tempo real
+            cwd=os.path.dirname(__file__),
+            env=env
+        )
+        print(f"[RFID Start] ✅ Processo iniciado com PID: {rfid_process.pid}")
+        
+        # Verificar se o processo iniciou corretamente
+        time.sleep(1)  # Dar mais tempo para inicializar
+        if rfid_process.poll() is not None:
+            # Processo terminou imediatamente - erro fatal
+            error_msg = f"Processo RFID terminou imediatamente (exit code: {rfid_process.returncode})"
+            print(f"[RFID Start] ❌ ERRO: {error_msg}")
+            print(f"[RFID Start] 🔍 Verifique: SPI habilitado, permissões GPIO, biblioteca MFRC522")
+            return jsonify({'success': False, 'error': error_msg})
+        
+        print(f"[RFID Start] 🎉 Sistema RFID funcionando - PID {rfid_process.pid}\n")
+        return jsonify({'success': True, 'pid': rfid_process.pid})
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[RFID Start] ❌ ERRO: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        rfid_process = None
+        return jsonify({'success': False, 'error': error_msg})
+
+
+
+@app.route('/usuarios/rfid/poll', methods=['GET'])
+def rfid_poll():
+    """
+    Verifica se há um RFID lido
+    
+    Response JSON:
+        {
+            "success": true,
+            "rfid": "ABC123..." ou null
+        }
+    """
+    try:
+        if not os.path.exists(RFID_FILE):
+            return jsonify({'success': True, 'rfid': None})
+        
+        # 🔥 OTIMIZAÇÃO: File locking para evitar race conditions
+        rfid = None
+        try:
+            with open(RFID_FILE, 'r+') as f:
+                # Adquirir lock exclusivo para ler E limpar atomicamente
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    content = f.read().strip()
+                    if content:
+                        rfid = content
+                        print(f"[RFID Poll] RFID detectado: {rfid}")
+                        
+                        # Limpar arquivo imediatamente (dentro do lock)
+                        f.seek(0)
+                        f.truncate()
+                        print(f"[RFID Poll] Arquivo limpo atomicamente")
+                finally:
+                    # Liberar lock
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (IOError, OSError) as e:
+            print(f"[RFID Poll] Erro ao ler arquivo: {e}")
+            return jsonify({'success': True, 'rfid': None})
+        
+        if rfid:
+            return jsonify({'success': True, 'rfid': rfid})
+        
+        return jsonify({'success': True, 'rfid': None})
+        
+    except Exception as e:
+        print(f"[RFID Poll] ERRO: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/usuarios/rfid/stop', methods=['POST'])
+@login_required
+def rfid_stop():
+    """Para o processo do leitor RFID"""
+    global rfid_process
+    
+    try:
+        print("\n[RFID Stop] 🛑 Parando sistema RFID...")
+        
+        # Usar killall para garantir que TODOS os processos sejam encerrados
+        killall_rfid_processes()
+        
+        # Resetar variável global
+        rfid_process = None
+        
+        # Limpar arquivo RFID
+        if os.path.exists(RFID_FILE):
+            with open(RFID_FILE, 'w') as f:
+                f.write('')
+            print("[RFID Stop] 📄 Arquivo RFID limpo")
+        
+        print("[RFID Stop] ✅ Sistema RFID parado\n")
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        print(f"[RFID Stop] ❌ ERRO: {str(e)}")
+        rfid_process = None
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/usuarios/rfid/status', methods=['GET'])
+@login_required
+def rfid_status():
+    """🔍 Retorna status do sistema RFID (útil para debug)"""
+    global rfid_process
+    
+    try:
+        # Verificar processo global
+        is_running = False
+        pid = None
+        
+        if rfid_process:
+            is_running = rfid_process.poll() is None
+            if is_running:
+                pid = rfid_process.pid
+        
+        # Verificar se há processos órfãos
+        orphan_count = 0
+        try:
+            result = subprocess.run(
+                ['ps', 'aux'],
+                capture_output=True,
+                text=True,
+                timeout=3
+            )
+            for line in result.stdout.split('\n'):
+                if 'rfid_manager.py' in line and 'grep' not in line:
+                    orphan_count += 1
+        except:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'running': is_running,
+            'pid': pid,
+            'orphan_processes': orphan_count,
+            'warning': '⚠️ Processos órfãos detectados!' if orphan_count > 1 else None
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+
+@app.route('/usuarios/selecionar-response-style')
+@login_required
+def selecionar_response_style():
+    """Tela de seleção de estilo de resposta"""
+    return render_template('selecionar_response_style.html')
+
+
+@app.route('/usuarios/selecionar-persona-gender')
+@login_required
+def selecionar_persona_gender():
+    """Tela de seleção de gênero da persona"""
+    return render_template('selecionar_persona_gender.html')
+
+
+@app.route('/usuarios/selecionar-language')
+@login_required
+def selecionar_language():
+    """Tela de seleção de idioma"""
+    return render_template('selecionar_language.html')
+
+
+@app.route('/usuarios/novo', methods=['GET', 'POST'])
+@login_required
+def novo_usuario():
+    """Formulário de cadastro de novo usuário"""
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            name = data.get('name', '').strip()
+            rfid = data.get('rfid', '').strip()
+            response_style = data.get('response_style', '').strip()
+            persona_gender = data.get('persona_gender', '').strip()
+            language = data.get('language', '').strip()
+            
+            # Validação
+            if not name or not rfid or not response_style or not persona_gender or not language:
+                return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
+            
+            # Verifica se nome já existe
+            if get_db().user_exists_by_name(name):
+                return jsonify({'success': False, 'message': 'Já existe um usuário com este nome!'})
+            
+            # Verifica se RFID já existe
+            if get_db().user_exists_by_rfid(rfid):
+                return jsonify({'success': False, 'message': 'Este RFID já está cadastrado!'})
+            
+            # Adiciona usuário
+            get_db().add_user(name, rfid, response_style, persona_gender, language)
+            return jsonify({'success': True, 'message': 'Usuário cadastrado com sucesso!', 'redirect': '/usuarios/lista'})
+        
+        except Exception as e:
+            error_msg = str(e)
+            if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
+                return jsonify({'success': False, 'message': 'Este RFID já está cadastrado'})
+            return jsonify({'success': False, 'message': f'Erro ao cadastrar: {error_msg}'})
+    
+    return render_template('form_usuario.html', user=None, 
+                         response_styles=RESPONSE_STYLES, 
+                         genders=GENDERS, 
+                         languages=LANGUAGES)
+
+
+@app.route('/usuarios/editar/<int:user_id>', methods=['GET', 'POST'])
+@login_required
+def editar_usuario(user_id):
+    """Formulário de edição de usuário"""
+    usuario = get_db().get_user(user_id)
+    if not usuario:
+        return redirect(url_for('lista_usuarios'))
+    
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            name = data.get('name', '').strip()
+            rfid = data.get('rfid', '').strip()
+            response_style = data.get('response_style', '').strip()
+            persona_gender = data.get('persona_gender', '').strip()
+            language = data.get('language', '').strip()
+            
+            # Validação
+            if not name or not rfid or not response_style or not persona_gender or not language:
+                return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
+            
+            # Verifica se nome já existe (excluindo o próprio usuário)
+            if get_db().user_exists_by_name(name, exclude_id=user_id):
+                return jsonify({'success': False, 'message': 'Já existe outro usuário com este nome!'})
+            
+            # Verifica se RFID já existe (excluindo o próprio usuário)
+            if get_db().user_exists_by_rfid(rfid, exclude_id=user_id):
+                return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário!'})
+            
+            # Atualiza
+            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language)
+            return jsonify({'success': True, 'message': 'Usuário atualizado com sucesso!', 'redirect': '/usuarios/lista'})
+        
+        except Exception as e:
+            error_msg = str(e)
+            if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
+                return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário'})
+            return jsonify({'success': False, 'message': f'Erro ao atualizar: {error_msg}'})
+    
+    return render_template('form_usuario.html', user=usuario, 
+                         response_styles=RESPONSE_STYLES, 
+                         genders=GENDERS, 
+                         languages=LANGUAGES)
+
+
+@app.route('/usuarios/confirmar-remocao/<int:user_id>', methods=['GET'])
+@login_required
+def confirmar_remocao(user_id):
+    """Tela de confirmação para remover usuário"""
+    usuario = get_db().get_user(user_id)
+    if not usuario:
+        return redirect(url_for('lista_usuarios'))
+    return render_template('confirmar_remocao.html', user=usuario)
+
+
+@app.route('/usuarios/remover/<int:user_id>', methods=['POST'])
+@login_required
+def remover_usuario(user_id):
+    """Remove um usuário"""
+    try:
+        usuario = get_db().get_user(user_id)
+        if usuario:
+            get_db().delete_user(user_id)
+            return redirect(url_for('lista_usuarios'))
+        return redirect(url_for('lista_usuarios'))
+    except Exception as e:
+        return redirect(url_for('lista_usuarios'))
+
+
+# ========== API PARA RFID ==========
+
+@app.route('/api/rfid-scan', methods=['POST'])
+@login_required
+def api_rfid_scan():
+    """Processa leitura de RFID do scanner"""
+    try:
+        data = request.get_json()
+        rfid_code = data.get('rfid', '').strip()
+        
+        if not rfid_code:
+            return jsonify({'success': False, 'message': 'Código RFID vazio'})
+        
+        # Retorna o código para preencher o campo
+        return jsonify({'success': True, 'rfid': rfid_code})
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Erro ao processar RFID: {str(e)}'})
+
+
+# ========== VOICE ASSISTANT API ==========
+
+@app.route('/api/chat/send', methods=['POST'])
+def api_chat_send():
+    """
+    Processa mensagem (texto ou voz) e retorna resposta com TTS
+    
+    Request JSON:
+        {
+            "message": "pergunta do usuário",
+            "rfid": "código RFID do usuário"
+        }
+    
+    Response JSON:
+        {
+            "success": true,
+            "response_text": "resposta da IA",
+            "audio_url": "/static/audio/tts_123456.wav",
+            "audio_duration": 3.5,
+            "conversation_context": [...],
+            "user": {...}
+        }
+    """
+    if not VOICE_ENABLED or not ollama_client or not tts_client:
+        return jsonify({
+            'success': False,
+            'error': 'Sistema de voz não disponível'
+        }), 503
+    
+    try:
+        data = request.get_json()
+        user_message = data.get('message', '').strip()
+        rfid = data.get('rfid', '')
+        
+        if not user_message:
+            return jsonify({'success': False, 'error': 'Mensagem vazia'}), 400
+        
+        # Modo anônimo vs usuário autenticado
+        is_anonymous = (not rfid or rfid == 'anonymous')
+        
+        if is_anonymous:
+            # Modo anônimo - sem histórico, configuração padrão
+            print(f"🤖 [API] Modo anônimo ativado")
+            user = None
+            user_id = None
+            conversation_context = []
+            system_prompt = """Você é um assistente virtual amigável e prestativo.
+IMPORTANTE: Responda SEMPRE com no máximo 2-3 frases curtas (menos de 150 caracteres).
+Seja direto, objetivo e conciso."""
+        else:
+            # Modo autenticado - busca usuário e histórico
+            db = get_db()
+            user = db.get_user_by_rfid(rfid)
+            
+            if not user:
+                return jsonify({'success': False, 'error': 'Usuário não encontrado'}), 404
+            
+            user_id = user['id']
+            
+            # Gerenciador de histórico
+            history_manager = ConversationHistory(db)
+            
+            # Salva mensagem do usuário
+            history_manager.add_message(user_id, 'user', user_message)
+            
+            # Recupera contexto de conversa (últimas 8 mensagens)
+            conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
+            
+            # Monta system prompt baseado nas preferências do usuário
+            system_prompt = _build_system_prompt(user)
+        
+        # Gera resposta com Ollama
+        user_name = user['name'] if user else 'Visitante'
+        print(f"🤖 [API] Gerando resposta para {user_name}...")
+        response_text = ollama_client.generate_response(
+            prompt=user_message,
+            system_prompt=system_prompt,
+            conversation_context=conversation_context
+        )
+        
+        if not response_text:
+            return jsonify({
+                'success': False,
+                'error': 'Erro ao gerar resposta'
+            }), 500
+        
+        # Salva resposta da IA (apenas se não for anônimo)
+        if not is_anonymous and user_id:
+            history_manager.add_message(user_id, 'assistant', response_text)
+        
+        # Gera áudio TTS
+        print(f"🔊 [API] Gerando áudio TTS...")
+        audio_url = tts_client.synthesize(response_text)
+        
+        if not audio_url:
+            # TTS falhou, mas retorna texto
+            print("⚠️  [API] Falha no TTS, retornando apenas texto")
+            
+            user_info = {
+                'id': user['id'],
+                'name': user['name'],
+                'response_style': user['response_style'],
+                'language': user['language']
+            } if user else {
+                'id': 0,
+                'name': 'Visitante',
+                'response_style': 'friendly',
+                'language': 'pt-BR'
+            }
+            
+            return jsonify({
+                'success': True,
+                'response_text': response_text,
+                'audio_url': None,
+                'audio_duration': 0,
+                'tts_error': True,
+                'user': user_info
+            })
+        
+        # Estima duração do áudio
+        audio_duration = tts_client._estimate_audio_duration(response_text)
+        
+        # Toca áudio no hardware (DEVE TOCAR AQUI - Sistema OFFLINE)
+        if audio_player and audio_player.is_available():
+            audio_file_path = os.path.join(voice_config.audio_static_dir, audio_url.replace('audio/', ''))
+            
+            # IMPORTANTE: blocking=False não funciona bem com pygame
+            # Precisamos usar threading para não bloquear a API
+            import threading
+            def play_audio_thread():
+                try:
+                    audio_player.play(audio_file_path, blocking=True)
+                except Exception as e:
+                    print(f"❌ [API] Erro ao reproduzir áudio: {e}")
+            
+            # Inicia reprodução em thread separada
+            audio_thread = threading.Thread(target=play_audio_thread, daemon=True)
+            audio_thread.start()
+            
+            print(f"🔊 [API] Reproduzindo áudio no hardware: {audio_file_path}")
+        else:
+            print(f"⚠️  [API] Audio player não disponível!")
+        
+        print(f"✅ [API] Resposta completa gerada")
+        
+        user_info = {
+            'id': user['id'],
+            'name': user['name'],
+            'response_style': user['response_style'],
+            'language': user['language']
+        } if user else {
+            'id': 0,
+            'name': 'Visitante',
+            'response_style': 'friendly',
+            'language': 'pt-BR'
+        }
+        
+        return jsonify({
+            'success': True,
+            'response_text': response_text,
+            'audio_url': f'/static/{audio_url}',
+            'audio_duration': audio_duration,
+            'user': user_info
+        })
+        
+    except Exception as e:
+        print(f"❌ [API] Erro: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/chat/history/<rfid>', methods=['GET'])
+def api_chat_history(rfid):
+    """
+    Recupera histórico de conversa de um usuário
+    
+    Query params:
+        - limit: número de mensagens (padrão: 20)
+    
+    Response JSON:
+        {
+            "success": true,
+            "history": [
+                {"role": "user", "content": "...", "timestamp": "..."},
+                {"role": "assistant", "content": "...", "timestamp": "..."}
+            ]
+        }
+    """
+    try:
+        db = get_db()
+        user = db.get_user_by_rfid(rfid)
+        
+        if not user:
+            return jsonify({'success': False, 'error': 'Usuário não encontrado'}), 404
+        
+        limit = request.args.get('limit', 20, type=int)
+        
+        history_manager = ConversationHistory(db)
+        history = history_manager.get_full_history(user['id'], limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'history': history,
+            'user': {
+                'id': user['id'],
+                'name': user['name']
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ [API] Erro ao recuperar histórico: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/chat/save', methods=['POST'])
+def api_chat_save():
+    """
+    Salva mensagem no histórico do banco de dados
+    
+    Request JSON:
+        {
+            "user_id": 1,
+            "role": "user" ou "assistant",
+            "content": "texto da mensagem"
+        }
+    
+    Response JSON:
+        {
+            "success": true,
+            "message_id": 123
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'Dados não fornecidos'}), 400
+        
+        user_id = data.get('user_id')
+        role = data.get('role')
+        content = data.get('content')
+        
+        # Validações
+        if not user_id or not role or not content:
+            return jsonify({'success': False, 'error': 'user_id, role e content são obrigatórios'}), 400
+        
+        if role not in ['user', 'assistant']:
+            return jsonify({'success': False, 'error': 'role deve ser "user" ou "assistant"'}), 400
+        
+        db = get_db()
+        history_manager = ConversationHistory(db)
+        
+        # 🔥 OTIMIZAÇÃO: Removida query duplicada - history_manager já verifica duplicatas
+        # A classe ConversationHistory tem lógica interna para evitar duplicatas
+        
+        # Adiciona a mensagem (com verificação interna de duplicatas)
+        message_id = history_manager.add_message(user_id, role, content)
+        
+        # 🔥 OTIMIZAÇÃO: clear_history() após add_message() para evitar race condition
+        # Limita a 10 mensagens - remove as mais antigas
+        history_manager.clear_history(user_id, keep_last=10)
+        
+        return jsonify({
+            'success': True,
+            'message_id': message_id
+        })
+        
+    except Exception as e:
+        print(f"❌ [API] Erro ao salvar mensagem: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/chat/clear/<rfid>', methods=['POST'])
+def api_chat_clear(rfid):
+    """Limpa histórico de conversa de um usuário"""
+    try:
+        db = get_db()
+        user = db.get_user_by_rfid(rfid)
+        
+        if not user:
+            return jsonify({'success': False, 'error': 'Usuário não encontrado'}), 404
+        
+        history_manager = ConversationHistory(db)
+        removed = history_manager.clear_history(user['id'])
+        
+        print(f"🧹 [API] Histórico limpo: {removed} mensagens removidas")
+        
+        return jsonify({
+            'success': True,
+            'removed': removed
+        })
+        
+    except Exception as e:
+        print(f"❌ [API] Erro ao limpar histórico: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/voice/status', methods=['GET'])
+def api_voice_status():
+    """Retorna status do sistema de voz"""
+    status = {
+        'voice_enabled': VOICE_ENABLED,
+        'ollama_available': False,
+        'tts_available': False,
+        'audio_player_available': False,
+        'whisper_available': False
+    }
+    
+    if VOICE_ENABLED:
+        if ollama_client:
+            status['ollama_available'] = ollama_client.is_available()
+            status['ollama_model'] = voice_config.ollama_model if voice_config else 'unknown'
+        
+        if tts_client:
+            status['tts_available'] = tts_client.is_available()
+            status['tts_model'] = voice_config.piper_model if voice_config else 'unknown'
+        
+        if audio_player:
+            status['audio_player_available'] = audio_player.is_available()
+        
+        if whisper_stt:
+            status['whisper_available'] = whisper_stt.is_available()
+            status['whisper_model'] = voice_config.whisper_model if voice_config else 'unknown'
+    
+    return jsonify(status)
+
+
+@app.route('/api/voice/record_and_transcribe', methods=['POST'])
+def api_voice_record_and_transcribe():
+    """
+    Grava áudio do microfone e transcreve com Whisper
+    
+    Request JSON:
+        duration: int (opcional) - duração máxima em segundos (padrão: 5)
+    
+    Response JSON:
+        success: bool
+        text: str - texto transcrito
+        error: str (se falhar)
+    """
+    try:
+        if not VOICE_ENABLED or not whisper_stt:
+            return jsonify({
+                'success': False,
+                'error': 'Whisper STT não disponível'
+            }), 503
+        
+        data = request.get_json() or {}
+        duration = data.get('duration', 3)  # Reduzido para 3 segundos
+        
+        # Importa temporariamente os módulos necessários
+        import tempfile
+        import subprocess
+        import wave
+        
+        # Grava áudio com detecção de silêncio (para automaticamente quando detectar silêncio)
+        print(f"🎤 [API] Gravando áudio do microfone (máx {duration}s)...")
+        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False, dir='/tmp')
+        temp_path = temp_file.name
+        temp_file.close()
+        
+        # Usa arecord com --max-file-time para gravar até o tempo máximo
+        # Sox será usado depois para detectar silêncio e cortar
+        cmd = [
+            'arecord',
+            '-D', voice_config.microphone_device,
+            '-f', 'S16_LE',
+            '-r', '16000',
+            '-c', '1',
+            '-d', str(duration),
+            temp_path
+        ]
+        
+        print(f"🎤 [API] Comando: {' '.join(cmd)}")
+        
+        # IMPORTANTE: wait=True para garantir que o processo termine antes de continuar
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 5)
+        
+        if result.returncode != 0:
+            print(f"❌ [API] Erro ao gravar: {result.stderr}")
+            return jsonify({
+                'success': False,
+                'error': f'Erro ao gravar áudio: {result.stderr}'
+            }), 500
+        
+        # Verifica se o arquivo foi criado
+        if not os.path.exists(temp_path):
+            print(f"❌ [API] Arquivo não foi criado: {temp_path}")
+            return jsonify({
+                'success': False,
+                'error': 'Arquivo de áudio não foi gravado'
+            }), 500
+        
+        print(f"✅ [API] Áudio gravado: {temp_path} ({os.path.getsize(temp_path)} bytes)")
+        
+        # Detecta se há conteúdo de áudio (não é só silêncio)
+        # Lê o arquivo WAV para verificar se tem conteúdo
+        try:
+            with wave.open(temp_path, 'rb') as wf:
+                frames = wf.readframes(wf.getnframes())
+                # Verifica se há algum som (não é só zeros)
+                import array
+                samples = array.array('h', frames)
+                max_amplitude = max(abs(s) for s in samples) if samples else 0
+                
+                if max_amplitude < 100:  # Praticamente silêncio
+                    print(f"⚠️  [API] Áudio muito baixo (amplitude: {max_amplitude})")
+                    os.remove(temp_path)
+                    return jsonify({
+                        'success': False,
+                        'error': 'Nenhum som detectado. Fale mais alto.'
+                    }), 400
+                
+                print(f"🔊 [API] Amplitude máxima: {max_amplitude}")
+        except Exception as e:
+            print(f"⚠️  [API] Erro ao verificar áudio: {e}")
+        
+        # Transcreve com Whisper
+        print(f"🔄 [API] Transcrevendo com Whisper...")
+        print(f"📁 [API] Modelo: {voice_config.whisper_model_path}/{voice_config.whisper_model}")
+        print(f"🔧 [API] Binário: {voice_config.whisper_binary}")
+        
+        text = whisper_stt._transcribe_audio_file(temp_path)
+        
+        # Remove arquivo temporário
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+        
+        if text:
+            print(f"✅ [API] Transcrito: '{text}'")
+            return jsonify({
+                'success': True,
+                'text': text
+            })
+        else:
+            print(f"❌ [API] Transcrição vazia ou falhou")
+            return jsonify({
+                'success': False,
+                'error': 'Não foi possível transcrever o áudio'
+            }), 500
+            
+    except Exception as e:
+        import traceback
+        print(f"❌ [API] Erro ao processar áudio: {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+def play_audio_feedback(sound_name: str):
+    """
+    Toca som de feedback no hardware
+    
+    Args:
+        sound_name: Nome do arquivo sem extensão (ex: 'chat_open', 'message_sent')
+    """
+    if not audio_player or not audio_player.is_available():
+        return False
+    
+    try:
+        sound_path = os.path.join('static', 'sounds', f'{sound_name}.wav')
+        if os.path.exists(sound_path):
+            # Define volume máximo (100%) para sons de feedback
+            audio_player.set_volume(1.0)
+            # Toca de forma não-bloqueante
+            threading.Thread(target=lambda: audio_player.play(sound_path, blocking=True), daemon=True).start()
+            return True
+        else:
+            print(f"⚠️  Som não encontrado: {sound_path}")
+            return False
+    except Exception as e:
+        print(f"❌ Erro ao tocar som: {e}")
+        return False
+
+
+@app.route('/api/feedback/play/<sound_name>', methods=['POST'])
+def api_play_feedback(sound_name):
+    """Toca som de feedback"""
+    success = play_audio_feedback(sound_name)
+    return jsonify({'success': success})
+
+
+@app.route('/api/wake_word_status', methods=['GET'])
+def api_wake_word_status():
+    """
+    Verifica se wake word foi detectado no ESP32.
+    Consumo único - flag é limpa após leitura.
+    
+    Response JSON:
+        {
+            "wake_detected": true/false,
+            "timestamp": "2024-02-06T12:34:56",
+            "connected": true/false,
+            "mode": "esp32"
+        }
+    """
+    global wake_word_manager
+    
+    wake_detected = False
+    connected = False
+    
+    if wake_word_manager:
+        wake_detected = wake_word_manager.check_and_clear_wake()
+        connected = wake_word_manager.running  # É uma propriedade, não método
+    
+    return jsonify({
+        'wake_detected': wake_detected,
+        'timestamp': datetime.now().isoformat(),
+        'connected': connected,
+        'mode': 'esp32'
+    })
+
+
+def _build_system_prompt(user) -> str:
+    """
+    Constrói system prompt baseado nas preferências do usuário
+    
+    Args:
+        user: Row do banco com dados do usuário
+    
+    Returns:
+        System prompt customizado
+    """
+    # Mapeia response_style para instruções
+    style_instructions = {
+        'short (objective)': 'Seja breve e objetivo. Respostas curtas e diretas.',
+        'neutral (balanced)': 'Mantenha equilíbrio entre brevidade e explicação.',
+        'detailed (explanatory)': 'Forneça explicações detalhadas e completas.',
+        'formal (business)': 'Use linguagem formal e profissional.',
+        'casual (chatty)': 'Use linguagem casual e amigável, como em uma conversa.'
+    }
+    
+    # Mapeia language para idioma
+    language_map = {
+        'pt-BR': 'português brasileiro',
+        'en-US': 'inglês',
+        'es-ES': 'espanhol'
+    }
+    
+    style = style_instructions.get(user['response_style'], style_instructions['neutral (balanced)'])
+    language = language_map.get(user['language'], 'português brasileiro')
+    
+    system_prompt = f"""Você é um assistente virtual útil e prestativo.
+Sempre responda em {language}.
+{style}
+IMPORTANTE: Limite suas respostas a no máximo 2-3 frases (150 caracteres) para TESTE.
+Seja natural e mantenha o contexto da conversa."""
+    
+    return system_prompt
+
+
+# ========== ERRO 404 ==========
+
+@app.errorhandler(404)
+def page_not_found(e):
+    """Página não encontrada"""
+    return redirect(url_for('index'))
+
+
+# ========== INICIALIZAÇÃO ==========
+
+if __name__ == '__main__':
+    print("=" * 70)
+    print("SISTEMA DE CADASTRO DE USUÁRIOS RFID")
+    print("=" * 70)
+    print()
+    print("Servidor iniciado em:")
+    print("  → http://localhost:5000")
+    print("  → http://127.0.0.1:5000")
+    print()
+    print("Sistema rodando 100% OFFLINE (sem internet)")
+    print()
+    print("Pressione Ctrl+C para parar o servidor")
+    print("=" * 70)
+    print()
+    
+    # Servidor local (offline)
+    # host='127.0.0.1' = apenas localhost (máxima segurança)
+    app.run(
+        debug=True,
+        host='127.0.0.1',  # Apenas localhost (offline)
+        port=5000,
+        threaded=True
+    )
+

@@ -1,0 +1,10 @@
+Flask==3.0.0
+Werkzeug==3.0.1
+pygame>=2.5.2
+requests>=2.31.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+pyaudio>=0.2.13
+pyserial>=3.5
+supertonic>=0.1.0
+PyYAML>=6.0.0

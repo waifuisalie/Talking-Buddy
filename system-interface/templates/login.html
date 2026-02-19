@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Sistema de Cadastro{% endblock %}
+
+{% block content %}
+<!-- Botão voltar ao assistente -->
+<a href="/" class="back-to-robot-btn" title="Voltar ao Assistente">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M19 12H5M5 12L12 19M5 12L12 5" stroke="#00ff00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+</a>
+
+<div class="box">
+    <div class="box-header">SISTEMA DE CADASTRO DE USUARIOS</div>
+    
+    <div class="box-content">
+        <form id="login-form" method="POST" action="/login">
+            <div class="form-group form-group-spaced">
+                <label class="form-label" for="username">Usuário:</label>
+                <input 
+                    type="text" 
+                    id="username" 
+                    name="username" 
+                    class="form-input keyboard-trigger" 
+                    readonly
+                    required
+                >
+            </div>
+            
+            <div class="form-group form-group-spaced">
+                <label class="form-label" for="password">Senha:</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password" 
+                    class="form-input keyboard-trigger" 
+                    readonly
+                    required
+                >
+            </div>
+            
+            <div class="btn-stack">
+                <button type="submit" class="btn btn-primary">
+                    ENTRAR
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if error %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    showPopup('{{ error }}');
+});
+</script>
+{% endif %}
+
+{% endblock %}
