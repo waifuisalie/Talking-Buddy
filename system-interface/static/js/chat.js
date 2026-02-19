@@ -399,93 +399,146 @@ class ChatManager {
     }
     
     generateAndShowResponse(userMessage) {
-        console.log('🤖 [generateAndShowResponse] Enviando para API...');
-        
-        // BLOQUEIA INPUTS IMEDIATAMENTE (enquanto IA está pensando)
+        console.log('🤖 [generateAndShowResponse] Enviando para API (SSE)...');
+
+        // BLOQUEIA INPUTS IMEDIATAMENTE
         this.blockInputs();
-        
-        // Marca que está interagindo (pausa timers)
         this.isInteracting = true;
-        
+
         // Cria div para a resposta (vazia inicialmente)
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble message-bubble-ai';
-        messageDiv.innerHTML = '<em class="thinking-indicator">🧠 Pensando...</em>'; // Indicador visual
+        messageDiv.innerHTML = '<em class="thinking-indicator">🧠 Pensando...</em>';
         this.messagesContainer.appendChild(messageDiv);
         this.scrollToBottom();
-        
-        // Verifica se há usuário logado (se não, usa modo anônimo)
+
         const rfid = this.currentUser && this.currentUser.rfid ? this.currentUser.rfid : 'anonymous';
-        
+
         console.log(`📤 [API] Enviando mensagem (RFID: ${rfid})...`);
-        
-        // Chama API de chat
+
+        // Step 1: POST to get session_id
         fetch('/api/chat/send', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                message: userMessage,
-                rfid: rfid
-            })
+            body: JSON.stringify({ message: userMessage, rfid: rfid })
         })
         .then(response => {
-            console.log(`📥 [API] Status: ${response.status}`);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             return response.json();
         })
         .then(data => {
-            console.log('📦 [API] Dados recebidos:', data);
-            
-            if (data.success) {
-                const responseText = data.response_text;
-                const audioUrl = data.audio_url;
-                const audioDuration = data.audio_duration || 0;
-                
-                // Remove indicador de "Pensando..."
-                messageDiv.innerHTML = '';
-                
-                console.log('✅ [API] Resposta recebida:', responseText.substring(0, 60) + '...');
-                console.log('🔊 [API] Áudio TTS:', audioUrl);
-                
-                // Se não tiver áudio (TTS falhou), usa TTS do navegador como fallback
-                if (!audioUrl || data.tts_error) {
-                    console.log('⚠️ [TTS] Servidor falhou, usando TTS do navegador');
-                    this.syncTextWithBrowserTTS(responseText, messageDiv);
-                } else {
-                    // Sincroniza texto com áudio TTS do servidor
-                    this.syncTextWithAudio(responseText, messageDiv, audioUrl, audioDuration);
-                }
-            } else {
-                console.error('❌ [API] Erro retornado:', data.error);
-                messageDiv.textContent = `Erro: ${data.error || 'Erro desconhecido'}`;
-                
-                // Volta ao estado idle
-                if (window.robotAvatar) {
-                    window.robotAvatar.setState('idle');
-                }
-                
-                // Marca fim da interação e DESBLOQUEIA INPUTS
-                this.isInteracting = false;
-                this.isTyping = false;
-                this.unblockInputs();
+            if (!data.success || !data.session_id) {
+                throw new Error(data.error || 'Falha ao iniciar sessão de streaming');
             }
+
+            const sessionId = data.session_id;
+            console.log(`📡 [SSE] Conectando ao stream: ${sessionId}`);
+
+            // Step 2: Connect to SSE stream
+            const eventSource = new EventSource(`/api/chat/stream/${sessionId}`);
+            let thinkingCleared = false;
+            let isSpeaking = false;
+
+            // Set robot to thinking state
+            if (window.robotAvatar) {
+                window.robotAvatar.setState('thinking');
+            }
+
+            // Pause inactivity timers during response
+            this.pauseInactivityTimers();
+            this.isTyping = true;
+
+            // --- SSE Event Handlers ---
+
+            eventSource.addEventListener('text_chunk', (e) => {
+                const { text } = JSON.parse(e.data);
+
+                // Clear "Pensando..." on first chunk
+                if (!thinkingCleared) {
+                    messageDiv.innerHTML = '';
+                    thinkingCleared = true;
+                }
+
+                // Append text (real streaming typewriter)
+                messageDiv.textContent += text;
+                this.scrollToBottom();
+            });
+
+            eventSource.addEventListener('sentence_playing', (e) => {
+                const { text, index } = JSON.parse(e.data);
+                console.log(`🔊 [SSE] Sentence ${index} playing on hardware: ${text.substring(0, 50)}...`);
+
+                // Set robot to speaking state
+                if (window.robotAvatar) {
+                    if (!isSpeaking) {
+                        window.robotAvatar.setState('speaking');
+                        isSpeaking = true;
+                    }
+                    window.robotAvatar.speakText(text);
+                }
+            });
+
+            eventSource.addEventListener('response_done', (e) => {
+                console.log('✅ [SSE] Response complete');
+                eventSource.close();
+                this._cleanupSSE(messageDiv);
+            });
+
+            eventSource.addEventListener('error', (e) => {
+                // SSE protocol error or server-sent error event
+                if (e.data) {
+                    try {
+                        const { error } = JSON.parse(e.data);
+                        console.error('❌ [SSE] Server error:', error);
+                        if (!thinkingCleared) messageDiv.innerHTML = '';
+                        messageDiv.textContent += `\n\nErro: ${error}`;
+                    } catch (_) {
+                        console.error('❌ [SSE] Parse error on error event');
+                    }
+                } else {
+                    console.error('❌ [SSE] Connection error');
+                }
+                eventSource.close();
+                this._cleanupSSE(messageDiv);
+            });
+
         })
         .catch(error => {
             console.error('❌ [API] Requisição falhou:', error);
             messageDiv.textContent = `Erro de conexão: ${error.message}`;
-            
-            // Volta ao estado idle
+
             if (window.robotAvatar) {
                 window.robotAvatar.setState('idle');
             }
-            
-            // Marca fim da interação e DESBLOQUEIA INPUTS
+
             this.isInteracting = false;
             this.isTyping = false;
             this.unblockInputs();
         });
+    }
+
+    _cleanupSSE(messageDiv) {
+        /**
+         * Shared cleanup after SSE stream ends (success or error)
+         */
+        this.isTyping = false;
+
+        if (window.robotAvatar) {
+            window.robotAvatar.stopSpeaking();
+            window.robotAvatar.setState('idle');
+            window.robotAvatar.resetInactivityTimer();
+        }
+
+        this.isInteracting = false;
+        this.resumeInactivityTimers();
+        this.unblockInputs();
+
+        // Save local history
+        if (this.currentUser && this.currentUser.rfid) {
+            this.saveUserHistory();
+        }
+
+        console.log('✅ [SSE] Cleanup completo, inputs desbloqueados');
     }
     
     syncTextWithAudio(text, targetElement, audioUrl, duration) {
