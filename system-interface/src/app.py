@@ -1407,25 +1407,67 @@ def api_voice_record_and_transcribe():
         
         print(f"✅ [API] Áudio gravado: {temp_path} ({os.path.getsize(temp_path)} bytes)")
         
-        # Detecta se há conteúdo de áudio (não é só silêncio)
-        # Lê o arquivo WAV para verificar se tem conteúdo
+        # Detecta se há conteúdo de áudio usando Mean VAD (rolling RMS smoothing)
+        # Ported from rpi5-chatbot/src/whisper_stt.py — filters transient noise spikes
         try:
+            import numpy as np
+            from collections import deque
+
             with wave.open(temp_path, 'rb') as wf:
-                frames = wf.readframes(wf.getnframes())
-                # Verifica se há algum som (não é só zeros)
-                import array
-                samples = array.array('h', frames)
-                max_amplitude = max(abs(s) for s in samples) if samples else 0
-                
-                if max_amplitude < 100:  # Praticamente silêncio
-                    print(f"⚠️  [API] Áudio muito baixo (amplitude: {max_amplitude})")
-                    os.remove(temp_path)
-                    return jsonify({
-                        'success': False,
-                        'error': 'Nenhum som detectado. Fale mais alto.'
-                    }), 400
-                
-                print(f"🔊 [API] Amplitude máxima: {max_amplitude}")
+                sample_rate = wf.getframerate()
+                n_frames = wf.getnframes()
+                frames = wf.readframes(n_frames)
+
+            audio_array = np.frombuffer(frames, dtype=np.int16).astype(np.float64)
+
+            if len(audio_array) == 0:
+                os.remove(temp_path)
+                return jsonify({
+                    'success': False,
+                    'error': 'Nenhum som detectado. Fale mais alto.'
+                }), 400
+
+            # Rolling RMS with ~0.2s window (same as rpi5-chatbot Mean VAD)
+            chunk_size = 1024
+            chunks_per_second = sample_rate / chunk_size
+            rms_window_size = max(3, int(0.2 * chunks_per_second))
+            rms_history = deque(maxlen=rms_window_size)
+
+            silence_threshold = voice_config.silence_threshold if voice_config else 30
+            speech_chunks = 0
+            total_chunks = 0
+
+            for i in range(0, len(audio_array), chunk_size):
+                chunk = audio_array[i:i + chunk_size]
+                if len(chunk) == 0:
+                    break
+
+                # Instant RMS
+                rms_squared = np.mean(chunk ** 2)
+                if np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0:
+                    rms_instant = 0.0
+                else:
+                    rms_instant = np.sqrt(rms_squared)
+
+                # Smoothed RMS (rolling average)
+                rms_history.append(rms_instant)
+                rms_smoothed = sum(rms_history) / len(rms_history)
+
+                total_chunks += 1
+                if rms_smoothed > silence_threshold:
+                    speech_chunks += 1
+
+            speech_ratio = speech_chunks / total_chunks if total_chunks > 0 else 0
+            print(f"🔊 [API] Mean VAD: {speech_chunks}/{total_chunks} chunks acima do threshold ({speech_ratio:.1%})")
+
+            if speech_ratio < 0.05:  # Less than 5% speech = silence
+                print(f"⚠️  [API] Áudio muito baixo (speech ratio: {speech_ratio:.1%})")
+                os.remove(temp_path)
+                return jsonify({
+                    'success': False,
+                    'error': 'Nenhum som detectado. Fale mais alto.'
+                }), 400
+
         except Exception as e:
             print(f"⚠️  [API] Erro ao verificar áudio: {e}")
         
