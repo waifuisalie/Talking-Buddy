@@ -28,6 +28,8 @@ import config
 import whisper_stt
 import ollama_llm
 import piper_tts
+import supertonic_tts
+import personality_manager
 import audio_utils
 import conversation
 import esp32_wake_listener
@@ -66,59 +68,37 @@ class SentenceDetector:
         self.buffer += chunk
         sentences = []
 
-        # Debug: Show buffer size periodically
-        if len(self.buffer) > 500 and len(self.buffer) % 100 < 10:
-            print(f"⚠️  Sentence buffer growing: {len(self.buffer)} chars, preview: {self.buffer[:100]}...")
-
         # Find sentence boundaries
         while True:
-            # Look for sentence ending characters
-            earliest_pos = -1
+            # Collect ALL sentence ending positions in the buffer
+            ending_positions = set()
             for ending in self.sentence_endings:
-                pos = self.buffer.find(ending)
-                if pos != -1:
-                    if earliest_pos == -1 or pos < earliest_pos:
-                        earliest_pos = pos
+                pos = 0
+                while True:
+                    pos = self.buffer.find(ending, pos)
+                    if pos == -1:
+                        break
+                    ending_positions.add(pos)
+                    pos += 1
 
-            # No sentence ending found
-            if earliest_pos == -1:
+            if not ending_positions:
                 break
 
-            # Extract potential sentence (include the ending character)
-            potential_sentence = self.buffer[:earliest_pos + 1].strip()
+            # Scan endings earliest-to-latest, flush at the first one that
+            # produces >= min_length chars.  This prevents deadlock when the
+            # first few endings are short fragments like "Olá!" (4 chars).
+            flushed = False
+            for pos in sorted(ending_positions):
+                potential_sentence = self.buffer[:pos + 1].strip()
+                if len(potential_sentence) >= self.min_sentence_length:
+                    sentences.append(potential_sentence)
+                    self.buffer = self.buffer[pos + 1:].strip()
+                    flushed = True
+                    break  # Restart outer loop to find more sentences
 
-            # Check if it meets minimum length
-            if len(potential_sentence) >= self.min_sentence_length:
-                sentences.append(potential_sentence)
-                # Remove sentence from buffer
-                self.buffer = self.buffer[earliest_pos + 1:].strip()
-            else:
-                # Too short, look for next ending after this one
-                # Keep this ending in buffer and look for the next one
-                if earliest_pos + 1 < len(self.buffer):
-                    # Look for next ending
-                    next_earliest = -1
-                    for ending in self.sentence_endings:
-                        pos = self.buffer.find(ending, earliest_pos + 1)
-                        if pos != -1:
-                            if next_earliest == -1 or pos < next_earliest:
-                                next_earliest = pos
-
-                    if next_earliest != -1:
-                        # Found another ending, try combining
-                        potential_sentence = self.buffer[:next_earliest + 1].strip()
-                        if len(potential_sentence) >= self.min_sentence_length:
-                            sentences.append(potential_sentence)
-                            self.buffer = self.buffer[next_earliest + 1:].strip()
-                        else:
-                            # Still too short, break and wait for more chunks
-                            break
-                    else:
-                        # No more endings, break and wait for more chunks
-                        break
-                else:
-                    # At end of buffer, break and wait for more chunks
-                    break
+            if not flushed:
+                # All endings produce text shorter than min_length — wait for more
+                break
 
         return sentences
 
@@ -138,16 +118,16 @@ class SentenceDetector:
 class StreamingTTSProcessor:
     """Processes streaming LLM chunks into TTS audio queue"""
 
-    def __init__(self, piper_tts, audio_player, min_sentence_length: int = 30):
+    def __init__(self, tts_engine, audio_player, min_sentence_length: int = 30):
         """
         Initialize streaming TTS processor
 
         Args:
-            piper_tts: PiperTTS instance for synthesis
+            tts_engine: TTS instance (PiperTTS or SupertonicTTS) for synthesis
             audio_player: AudioPlayer instance with queue support
             min_sentence_length: Minimum characters for sentence detection
         """
-        self.piper_tts = piper_tts
+        self.tts = tts_engine
         self.audio_player = audio_player
         self.sentence_detector = SentenceDetector(min_sentence_length)
         self.full_response = ""
@@ -169,7 +149,7 @@ class StreamingTTSProcessor:
         for sentence in sentences:
             print(f"🎙️ Synthesizing sentence ({len(sentence)} chars): {sentence[:80]}...")
             try:
-                audio_file = self.piper_tts.synthesize_to_temp(sentence)
+                audio_file = self.tts.synthesize_to_temp(sentence)
                 if audio_file:
                     metadata = {
                         "text": sentence,
@@ -188,7 +168,7 @@ class StreamingTTSProcessor:
         if final_sentence:
             print(f"🎙️ Finalizing: synthesizing remaining buffer ({len(final_sentence)} chars): {final_sentence[:80]}...")
             try:
-                audio_file = self.piper_tts.synthesize_to_temp(final_sentence)
+                audio_file = self.tts.synthesize_to_temp(final_sentence)
                 if audio_file:
                     metadata = {
                         "text": final_sentence,
@@ -219,9 +199,10 @@ class VoiceChatbot:
         # Core components
         self.whisper_stt = None
         self.ollama_llm = None
-        self.piper_tts = None
+        self.tts = None  # TTS engine (Piper or Supertonic)
         self.audio_player = None
         self.conversation_manager = None
+        self.system_prompt = ""  # Extracted personality system prompt
 
         # Audio device detector (NEW)
         self.device_detector = None
@@ -294,10 +275,30 @@ class VoiceChatbot:
                 print("❌ Ollama service is not available. Please start Ollama first.")
                 return False
 
-            # Initialize TTS
-            self.piper_tts = piper_tts.PiperTTS(self.config.piper)
-            if not self.piper_tts.is_available():
-                print("❌ Piper TTS is not available.")
+            # Extract personality system prompt (FIX: was never extracted before!)
+            pm = personality_manager.get_personality_manager()
+            personality_data = pm.get_personality(self.config.ollama.personality)
+
+            if personality_data:
+                base_prompt = personality_data['system_prompt']
+                # Localize for target language
+                target_language = self.config.supertonic.language if hasattr(self.config, 'supertonic') else 'pt'
+                self.system_prompt = self._localize_system_prompt(base_prompt, target_language)
+                print(f"✅ Loaded personality '{self.config.ollama.personality}' for language '{target_language}'")
+            else:
+                self.system_prompt = self.config.conversation.system_prompt  # Fallback
+                print(f"⚠️  Personality '{self.config.ollama.personality}' not found, using default system prompt")
+
+            # Initialize TTS (conditional based on engine)
+            if self.config.tts_engine == "supertonic":
+                # Sync personality to supertonic config
+                self.config.supertonic.personality = self.config.ollama.personality
+                self.tts = supertonic_tts.SupertonicTTS(self.config.supertonic)
+            else:
+                self.tts = piper_tts.PiperTTS(self.config.piper)
+
+            if not self.tts.is_available():
+                print(f"❌ {self.config.tts_engine.title()} TTS is not available.")
                 return False
 
             # Initialize audio player with device detector
@@ -351,6 +352,32 @@ class VoiceChatbot:
         except Exception as e:
             print(f"❌ Error initializing components: {e}")
             return False
+
+    def _localize_system_prompt(self, base_prompt: str, language: str) -> str:
+        """
+        Localize system prompt for target language
+
+        Replaces the Portuguese language instruction with the appropriate
+        instruction for the target language.
+
+        Args:
+            base_prompt: Base system prompt from personality definition
+            language: Target language code (pt, en, es)
+
+        Returns:
+            Localized system prompt
+        """
+        LANGUAGE_INSTRUCTIONS = {
+            "pt": "Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta.",
+            "en": "You are a helpful and friendly assistant. Always respond in English, regardless of the question's language.",
+            "es": "Eres un asistente útil y amigable. Siempre responde en español, independientemente del idioma de la pregunta."
+        }
+
+        # The Portuguese instruction to replace
+        pt_instruction = "Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta."
+
+        # Replace with target language instruction
+        return base_prompt.replace(pt_instruction, LANGUAGE_INSTRUCTIONS.get(language, pt_instruction))
 
     def start(self, start_mode: str = "light_sleep") -> bool:
         """
@@ -440,8 +467,8 @@ class VoiceChatbot:
         #     self.silence_detector.stop_monitoring()
 
         # Cleanup
-        if self.piper_tts:
-            self.piper_tts.cleanup_temp_files()
+        if self.tts:
+            self.tts.cleanup_temp_files()
 
         audio_utils.cleanup_temp_files()
 
@@ -547,7 +574,7 @@ class VoiceChatbot:
             print("🤖 Generating response...")
             ai_response = self.ollama_llm.generate_response(
                 user_input,
-                self.config.conversation.system_prompt
+                self.system_prompt  # Use extracted personality prompt
             )
 
             if ai_response:
@@ -555,7 +582,7 @@ class VoiceChatbot:
                 self.conversation_manager.add_assistant_message(ai_response)
 
                 # Convert to speech
-                audio_file = self.piper_tts.synthesize_to_temp(ai_response)
+                audio_file = self.tts.synthesize_to_temp(ai_response)
 
                 if audio_file:
                     # Play response
@@ -584,7 +611,7 @@ class VoiceChatbot:
 
             # Initialize streaming components
             tts_processor = StreamingTTSProcessor(
-                self.piper_tts,
+                self.tts,
                 self.audio_player,
                 min_sentence_length=self.config.conversation.min_sentence_length
             )
@@ -620,7 +647,7 @@ class VoiceChatbot:
             chunks_received = 0
             for chunk in self.ollama_llm.generate_streaming_response(
                 user_input,
-                self.config.conversation.system_prompt
+                self.system_prompt  # Use extracted personality prompt
             ):
                 tts_processor.process_chunk(chunk)
                 chunks_received += 1
@@ -638,13 +665,19 @@ class VoiceChatbot:
                 self.audio_player.signal_generation_complete()
 
                 # Wait for queue to finish playing (callback sets queue_finished flag)
-                # Timeout after 60 seconds to prevent infinite waiting
-                wait_start = time.time()
-                while not queue_finished and time.time() - wait_start < 60:
+                # Keep waiting as long as audio is actively playing.
+                # Only timeout if the player has been idle for 10s without
+                # queue_finished firing (indicates a callback bug, not long audio).
+                idle_since = None
+                while not queue_finished:
                     time.sleep(0.1)
-
-                if not queue_finished:
-                    print("⚠️  Timeout waiting for audio queue to finish")
+                    if self.audio_player.is_busy() or not self.audio_player.is_queue_empty():
+                        idle_since = None  # Still playing, reset idle timer
+                    elif idle_since is None:
+                        idle_since = time.time()  # Player just went idle
+                    elif time.time() - idle_since > 10:
+                        print("⚠️  Audio player idle but queue callback never fired — moving on")
+                        break
 
                 # Add complete response to history
                 if full_response.strip():
@@ -690,45 +723,13 @@ class VoiceChatbot:
             print("💤 Single-shot mode: Entering light sleep")
             self._enter_light_sleep()
 
-        elif interaction_mode == "conversation":
-            # Always continue listening (original behavior)
+        else:
+            # Conversation mode (default): keep listening after response
             if self.whisper_stt:
                 self.whisper_stt.resume_recording()
             self.state_manager.set_state("listening")
             # Start conversation timeout (30s)
             self.timeout_manager.start_conversation_timer()
-
-        elif interaction_mode == "smart":
-            # Continue only if AI asks a question
-            if self._response_invites_continuation(response_text):
-                print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
-                if self.whisper_stt:
-                    self.whisper_stt.resume_recording()
-                self.state_manager.set_state("listening")
-                # Use shorter timeout for follow-ups
-                self.timeout_manager.start_conversation_timer(
-                    timeout=self.config.conversation.smart_mode_followup_timeout
-                )
-            else:
-                print("💤 Smart mode: Response complete, entering light sleep")
-                self._enter_light_sleep()
-
-        else:
-            # Unknown mode, default to conversation mode
-            print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
-            if self.whisper_stt:
-                self.whisper_stt.resume_recording()
-            self.state_manager.set_state("listening")
-            self.timeout_manager.start_conversation_timer()
-
-    def _response_invites_continuation(self, response_text: str) -> bool:
-        """
-        Check if the AI response invites continuation (asks a question)
-        Used for "smart" interaction mode
-
-        Simply checks if the response ends with a question mark
-        """
-        return response_text.strip().endswith('?')
 
     def _play_response(self, audio_file: str, response_text: str):
         """Play the AI response"""
@@ -758,35 +759,12 @@ class VoiceChatbot:
                 print("💤 Single-shot mode: Entering light sleep")
                 self._enter_light_sleep()
 
-            elif interaction_mode == "conversation":
-                # Always continue listening (original behavior)
+            else:
+                # Conversation mode (default): keep listening after response
                 if self.whisper_stt:
                     self.whisper_stt.resume_recording()
                 self.state_manager.set_state("listening")
                 # Start conversation timeout (30s)
-                self.timeout_manager.start_conversation_timer()
-
-            elif interaction_mode == "smart":
-                # Continue only if AI asks a question
-                if self._response_invites_continuation(response_text):
-                    print(f"💡 Smart mode: AI asked question, waiting {self.config.conversation.smart_mode_followup_timeout}s for follow-up")
-                    if self.whisper_stt:
-                        self.whisper_stt.resume_recording()
-                    self.state_manager.set_state("listening")
-                    # Use shorter timeout for follow-ups
-                    self.timeout_manager.start_conversation_timer(
-                        timeout=self.config.conversation.smart_mode_followup_timeout
-                    )
-                else:
-                    print("💤 Smart mode: Response complete, entering light sleep")
-                    self._enter_light_sleep()
-
-            else:
-                # Unknown mode, default to conversation mode
-                print(f"⚠️  Unknown interaction mode '{interaction_mode}', defaulting to conversation")
-                if self.whisper_stt:
-                    self.whisper_stt.resume_recording()
-                self.state_manager.set_state("listening")
                 self.timeout_manager.start_conversation_timer()
 
         print(f"🤖 Assistant: {response_text}")
@@ -954,8 +932,8 @@ class VoiceChatbot:
 
     def say(self, text: str):
         """Make the assistant say something (for testing)"""
-        if self.piper_tts and self.audio_player:
-            audio_file = self.piper_tts.synthesize_to_temp(text)
+        if self.tts and self.audio_player:
+            audio_file = self.tts.synthesize_to_temp(text)
             if audio_file:
                 self.audio_player.play(audio_file, blocking=True)
                 Path(audio_file).unlink(missing_ok=True)

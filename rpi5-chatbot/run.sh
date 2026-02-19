@@ -146,57 +146,49 @@ run_preflight_checks() {
     echo "✅ Whisper model"
 
     # ========================================================================
-    # CHECK 4: Piper Binary (FATAL)
+    # CHECK 4: TTS Engines (WARNING ONLY - Non-fatal)
     # ========================================================================
-    debug_log "Checking Piper binary..."
-    local piper_binary="$HOME/piper/piper/piper"
-    if ! check_file "$piper_binary"; then
-        show_error "Piper binary not found" \
-                   "The Piper TTS executable is missing."
-        echo ""
-        echo "   Expected location: $piper_binary"
-        echo ""
-        echo "   Possible causes:"
-        echo "   • Piper not installed"
-        echo "   • Installation failed during setup"
-        echo "   • Binary was deleted or moved"
-        echo ""
-        echo "   How to fix:"
-        echo "   1. Check installation: ls -la ~/piper/piper/"
-        echo "   2. Re-run setup if missing: bash setup.sh"
-        echo "   3. Manual install: See INSTALL.md for instructions"
-        echo ""
-        echo "   💡 Tip: Piper provides text-to-speech for voice responses"
-        return $EXIT_PIPER_MISSING
-    fi
-    echo "✅ Piper binary"
+    debug_log "Checking TTS engines..."
 
-    # ========================================================================
-    # CHECK 5: Piper Model (FATAL)
-    # ========================================================================
-    debug_log "Checking Piper model..."
+    # Check Piper TTS
+    local piper_binary="$HOME/piper/piper/piper"
     local piper_model="$HOME/piper/piper/pt_BR-faber-medium.onnx"
-    if ! check_file_size "$piper_model" 50000000; then
-        show_error "Piper model not found or corrupted" \
-                   "The Brazilian Portuguese TTS model is missing or incomplete."
-        echo ""
-        echo "   Expected location: $piper_model"
-        echo "   Expected size: >50MB (~63MB)"
-        echo ""
-        echo "   Possible causes:"
-        echo "   • Model not downloaded"
-        echo "   • Download was interrupted"
-        echo "   • File was corrupted or deleted"
+    local piper_available=0
+
+    if check_file "$piper_binary" && check_file_size "$piper_model" 50000000; then
+        echo "✅ Piper TTS (Portuguese)"
+        piper_available=1
+    else
+        echo "⚠️  Piper TTS not found (Portuguese TTS unavailable)"
+        debug_log "Piper binary: $piper_binary"
+        debug_log "Piper model: $piper_model"
+    fi
+
+    # Check Supertonic TTS (must use venv python)
+    local supertonic_available=0
+    if venv/bin/python -c "import supertonic" 2>/dev/null; then
+        echo "✅ Supertonic 2 TTS (Multilingual: pt, en, es)"
+        supertonic_available=1
+    else
+        echo "⚠️  Supertonic 2 TTS not installed (multilingual TTS unavailable)"
+    fi
+
+    # At least one TTS engine must be available
+    if [ $piper_available -eq 0 ] && [ $supertonic_available -eq 0 ]; then
+        show_error "No TTS engines found" \
+                   "At least one TTS engine (Piper or Supertonic) must be installed."
         echo ""
         echo "   How to fix:"
-        echo "   1. Check if file exists: ls -lh ~/piper/piper/*.onnx"
-        echo "   2. Re-run setup to download: bash setup.sh"
-        echo "   3. Check disk space: df -h"
+        echo "   1. Re-run setup: bash setup.sh"
+        echo "   2. Or install Supertonic manually: pip install supertonic"
         echo ""
-        echo "   💡 Tip: This model provides Brazilian Portuguese voice output"
+        echo "   💡 Tip: Supertonic is 9x faster and supports multiple languages"
         return $EXIT_PIPER_MISSING
     fi
-    echo "✅ Piper model"
+
+    if [ $supertonic_available -eq 1 ]; then
+        echo "   💡 Tip: Use --tts-engine supertonic for 9x faster, multilingual TTS"
+    fi
 
     # ========================================================================
     # CHECK 6: Ollama Service (FATAL)

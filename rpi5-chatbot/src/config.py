@@ -52,7 +52,7 @@ class OllamaConfig:
     url: str = "http://localhost:11434/api/chat"  # Using /chat endpoint for proper message handling
     model: str = "gemma3-ptbr"  # Default: gemma3 with forced Portuguese (fastest for RPi5)
     temperature: float = 0.7
-    max_tokens: int = 800  # Increased from 250 to allow longer responses
+    max_tokens: int = 1500  # Enough for verbose personalities (educational, storyteller)
     timeout: int = 30
 
     # Personality configuration (NEW)
@@ -86,6 +86,16 @@ class PiperConfig:
     temp_dir: str = "/tmp"
 
 @dataclass
+class SupertonicConfig:
+    """Supertonic 2 TTS configuration"""
+    language: str = "pt"  # pt, en, or es
+    personality: str = "neutral"  # Inherited from OllamaConfig
+    temp_dir: str = "/tmp"
+    # Optional future enhancements:
+    # speed: float = 1.0
+    # pitch_shift: float = 0.0
+
+@dataclass
 class AudioConfig:
     silence_threshold: float = 1.0  # seconds
     sample_rate: int = 16000
@@ -106,12 +116,8 @@ class ConversationConfig:
 
     # Interaction mode: How the assistant handles multi-turn conversations
     # - "single-shot": Wake word → One Q&A → Sleep (Alexa-style, best battery)
-    # - "conversation": Wake word → Continuous conversation → Manual dismissal/timeout (current behavior)
-    # - "smart": Single-shot by default, but continues if LLM asks a question (hybrid)
-    interaction_mode: str = "smart"
-
-    # For "smart" mode: How long to wait for follow-up after LLM asks a question
-    smart_mode_followup_timeout: float = 10.0  # seconds
+    # - "conversation": Wake word → Continuous conversation → Manual dismissal/timeout
+    interaction_mode: str = "conversation"
 
     # Streaming configuration (NEW)
     use_streaming: bool = True  # Enable streaming LLM + incremental TTS (default: enabled)
@@ -135,9 +141,11 @@ class ChatbotConfig:
         self.whisper = WhisperConfig()
         self.ollama = OllamaConfig()
         self.piper = PiperConfig()
+        self.supertonic = SupertonicConfig()
         self.audio = AudioConfig()
         self.conversation = ConversationConfig()
         self.gpio = GPIOConfig()
+        self.tts_engine = "piper"  # Default to piper during migration (change to "supertonic" after testing)
 
     def validate(self):
         """Validate that all required files and services exist"""

@@ -46,6 +46,25 @@ if [ ${#AVAILABLE_MODELS[@]} -eq 0 ]; then
     exit 1
 fi
 
+# Map base model names to directory names
+declare -A MODEL_TO_DIR=(
+    ["gemma3:1b"]="gemma3"
+    ["qwen2.5:1.5b"]="qwen2.5"
+    ["llama3.2:1b"]="llama3.2"
+)
+
+# Build list of directories to process
+DIRS_TO_PROCESS=()
+for model in "${AVAILABLE_MODELS[@]}"; do
+    dir="${MODEL_TO_DIR[$model]}"
+    if [ -n "$dir" ]; then
+        DIRS_TO_PROCESS+=("$dir")
+    fi
+done
+
+echo ""
+echo "📂 Will process directories: ${DIRS_TO_PROCESS[*]}"
+
 echo ""
 echo "🔨 Generating Modelfiles from personalities.yaml..."
 python3 generate_personalities.py || {
@@ -55,6 +74,7 @@ python3 generate_personalities.py || {
 
 echo ""
 echo "📝 Creating personality models in Ollama..."
+echo "   ⏱️  Each model takes ~5-10 seconds to create"
 echo ""
 
 # Function to create a model
@@ -71,11 +91,13 @@ create_model() {
     fi
 
     echo "   🔧 Creating $model_name..."
-    if ollama create "$model_name" -f "$modelfile" > /dev/null 2>&1; then
-        echo "   ✅ $model_name created"
+    # Create model and capture output
+    if output=$(ollama create "$model_name" -f "$modelfile" 2>&1); then
+        echo "   ✅ $model_name created successfully"
         return 0
     else
         echo "   ❌ Failed to create $model_name"
+        echo "      Error: $output"
         return 1
     fi
 }
@@ -85,32 +107,53 @@ CREATED=0
 SKIPPED=0
 FAILED=0
 
-# Iterate through base model directories
-for base_dir in gemma3 llama3.2 qwen2.5; do
+# Temporarily disable exit on error for the creation loop
+# (we want to continue even if one model fails)
+set +e
+
+# Iterate through base model directories (only those with installed models)
+for base_dir in "${DIRS_TO_PROCESS[@]}"; do
     if [ ! -d "$base_dir" ]; then
+        echo "   ⚠️  Directory $base_dir not found (skipping)"
         continue
     fi
 
+    # Count modelfiles for progress indication
+    modelfile_count=$(find "$base_dir" -name "Modelfile.*" -type f | wc -l)
+    current=0
+
     echo ""
-    echo "📦 Processing $base_dir models..."
+    echo "📦 Processing $base_dir models ($modelfile_count personalities)..."
+
+    # Debug: Check if files exist
+    if [ "$modelfile_count" -eq 0 ]; then
+        echo "   ⚠️  No Modelfiles found in $base_dir/"
+        continue
+    fi
 
     for modelfile in "$base_dir"/Modelfile.*; do
         if [ -f "$modelfile" ]; then
+            current=$((current + 1))
             # Extract personality from filename (e.g., Modelfile.casual -> casual)
             personality=$(basename "$modelfile" | sed 's/^Modelfile\.//')
 
+            echo "   [$current/$modelfile_count] Processing: $personality"
+
             if create_model "$modelfile" "$base_dir" "$personality"; then
                 if ollama list | grep -q "${base_dir}-ptbr-${personality}"; then
-                    ((CREATED++))
+                    CREATED=$((CREATED + 1))
                 else
-                    ((SKIPPED++))
+                    SKIPPED=$((SKIPPED + 1))
                 fi
             else
-                ((FAILED++))
+                FAILED=$((FAILED + 1))
             fi
         fi
     done
 done
+
+# Re-enable exit on error
+set -e
 
 echo ""
 echo "=========================================="

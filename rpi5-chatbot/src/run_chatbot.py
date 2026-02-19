@@ -23,23 +23,32 @@ import esp32_wake_listener
 import audio_device_detector
 import personality_manager
 
-def create_custom_config(model_name=None, language_mode="native", interaction_mode="smart",
-                        input_device=None, output_device=None, personality=None, base_model=None):
+def create_custom_config(model_name=None, language="pt", interaction_mode="conversation",
+                        input_device=None, output_device=None, personality=None, base_model=None,
+                        tts_engine="piper"):
     """Create a custom configuration if needed
 
     Args:
         model_name: Model name (e.g., "qwen2.5:1.5b", "gemma3:1b", "llama3.2:1b")
-        language_mode: "native" for native Portuguese support, "pt-br" for forced Portuguese via Modelfile
-        interaction_mode: "single-shot", "conversation", or "smart" (default)
+        language: Response language: "pt", "en", or "es" (default: "pt")
+        interaction_mode: "single-shot" or "conversation" (default)
         input_device: Override input device (name pattern or index)
         output_device: Override output device (name pattern or index)
         personality: Personality ID (e.g., "casual", "formal", "humorous")
         base_model: Base model for personality (e.g., "gemma3", "qwen2.5", "llama3.2")
+        tts_engine: TTS engine to use: "piper" or "supertonic" (default: "piper")
     """
     chatbot_config = config.ChatbotConfig.from_env()
 
     # Initialize personality manager
     pm = personality_manager.get_personality_manager()
+
+    # Configure language and TTS engine
+    chatbot_config.supertonic.language = language
+    chatbot_config.whisper.language = language  # Sync STT with TTS language
+    chatbot_config.tts_engine = tts_engine
+    print(f"🌐 Language: {language.upper()}")
+    print(f"🔊 TTS Engine: {tts_engine.title()}")
 
     # Apply device overrides
     if input_device:
@@ -65,53 +74,22 @@ def create_custom_config(model_name=None, language_mode="native", interaction_mo
         chatbot_config.ollama.model = final_model
         chatbot_config.ollama.personality = personality
         chatbot_config.ollama.base_model_preference = base
+        chatbot_config.supertonic.personality = personality  # Sync personality to TTS
 
         personality_info = pm.get_personality(personality)
         print(f"🎭 Personality: {personality_info['name']} - {personality_info['description']}")
         print(f"📦 Model: {final_model}")
 
     elif model_name:
-        # Legacy mode: explicit model name without personality
-        if language_mode == "pt-br":
-            # Use the -ptbr variant (created from Modelfile)
-            # Convert model names to their pt-br equivalents
-            # Pattern: extract base name, keep any suffixes after version, append -ptbr
-            # e.g., "qwen2.5:1.5b" -> "qwen2.5-ptbr"
-            # e.g., "gemma3:1b-it-qat" -> "gemma3-it-qat-ptbr"
-            # e.g., "gemma3:1b" -> "gemma3-ptbr"
-            # e.g., "mistral" -> "mistral-ptbr"
-
-            if ':' in model_name:
-                # Has version info: "gemma3:1b-it-qat" or "qwen2.5:1.5b"
-                base, version_part = model_name.split(':', 1)
-
-                # Extract version number (e.g., "1.5b", "1b") and any suffixes
-                # Version ends with 'b' or 'b-' followed by suffix
-                match = re.match(r'(\d+(?:\.\d+)?b)(.*)', version_part)
-                if match:
-                    # Has suffixes like "-it-qat"
-                    suffixes = match.group(2)
-                    final_model = f"{base}{suffixes}-ptbr"
-                else:
-                    # Just the version, no suffixes
-                    final_model = f"{base}-ptbr"
-            else:
-                # No version info: "mistral"
-                final_model = f"{model_name}-ptbr"
-        else:
-            # Use native model (relies on native Portuguese support)
-            final_model = model_name
-
-        chatbot_config.ollama.model = final_model
-        print(f"📦 Model: {final_model}")
-        print(f"🌐 Language Mode: {'Forced Portuguese (via Modelfile)' if language_mode == 'pt-br' else 'Native Portuguese'}")
+        # Explicit model name without personality
+        chatbot_config.ollama.model = model_name
+        print(f"📦 Model: {model_name}")
 
     # Apply interaction mode
     chatbot_config.conversation.interaction_mode = interaction_mode
     mode_descriptions = {
         "single-shot": "Single-shot (Alexa-style, best battery)",
-        "conversation": "Continuous conversation (original behavior)",
-        "smart": "Smart hybrid (continues on questions)"
+        "conversation": "Continuous conversation (wake word → chat until timeout/goodbye)"
     }
     print(f"💬 Interaction Mode: {mode_descriptions.get(interaction_mode, interaction_mode)}")
 
@@ -186,9 +164,16 @@ def main():
     parser.add_argument(
         "--language",
         type=str,
-        choices=["native", "pt-br"],
-        default="native",
-        help="Language mode (default: native). 'native' uses model's native Portuguese support, 'pt-br' forces Portuguese via Modelfile"
+        choices=["pt", "en", "es"],
+        default="pt",
+        help="Response language (default: pt). 'pt'=Portuguese, 'en'=English, 'es'=Spanish. Works with both TTS and LLM."
+    )
+    parser.add_argument(
+        "--tts-engine",
+        type=str,
+        choices=["piper", "supertonic"],
+        default="piper",
+        help="TTS engine (default: piper during migration). 'supertonic' provides 9x faster synthesis and multilingual support."
     )
 
     # Personality arguments (NEW)
@@ -236,9 +221,9 @@ def main():
     parser.add_argument(
         "--interaction-mode",
         type=str,
-        choices=["single-shot", "conversation", "smart"],
-        default="smart",
-        help="Interaction mode (default: smart). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat, 'smart' for hybrid (continues if AI asks question)"
+        choices=["single-shot", "conversation"],
+        default="conversation",
+        help="Interaction mode (default: conversation). 'single-shot' for Alexa-style (best battery), 'conversation' for continuous chat until timeout/goodbye"
     )
 
     # Audio device arguments
@@ -277,9 +262,14 @@ def main():
 
     # Create configuration with model selection, personality, and interaction mode
     chatbot_config = create_custom_config(
-        args.model, args.language, args.interaction_mode,
-        args.input_device, args.output_device,
-        args.personality, args.base_model
+        model_name=args.model,
+        language=args.language,
+        interaction_mode=args.interaction_mode,
+        input_device=args.input_device,
+        output_device=args.output_device,
+        personality=args.personality,
+        base_model=args.base_model,
+        tts_engine=args.tts_engine
     )
 
     if args.test:
