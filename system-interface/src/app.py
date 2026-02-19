@@ -5,7 +5,7 @@ Sistema de Cadastro de Usuários RFID - Servidor Web
 Interface touch otimizada para tela sensível ao toque
 """
 
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, g, send_from_directory, Response, stream_with_context
 from functools import wraps
 from datetime import datetime
 import os
@@ -34,7 +34,9 @@ import atexit
 
 # Importa módulo de voz
 try:
-    from voice_assistant import VoiceConfig, OllamaClient, TTSClient, HardwareAudioPlayer, ConversationHistory
+    from voice_assistant import (VoiceConfig, OllamaClient, TTSClient, HardwareAudioPlayer,
+                                  ConversationHistory, SupertonicTTSClient, SentenceDetector,
+                                  StreamingTTSProcessor)
     VOICE_ENABLED = True
     print("✅ Módulo de voz carregado")
 except ImportError as e:
@@ -189,11 +191,16 @@ killall_rfid_processes()
 print()
 
 
+# ========== SSE MANAGER ==========
+from sse_manager import SSEManager
+sse_manager = SSEManager()
+
 # ========== VOICE ASSISTANT INITIALIZATION ==========
 
 voice_config = None
 ollama_client = None
 tts_client = None
+supertonic_tts_client = None  # Supertonic TTS (optional)
 audio_player = None
 whisper_stt = None  # Whisper STT (reconhecimento de voz)
 
@@ -268,9 +275,22 @@ if VOICE_ENABLED:
             # Warmup TTS
             print("\n2️⃣  Testando sintetizador de voz...")
             if tts_client.warmup():
-                print("   ✅ Sintetizador de voz funcionando")
+                print("   ✅ Sintetizador de voz (Piper) funcionando")
             else:
-                print("   ⚠️  Warmup TTS falhou - áudio pode não funcionar")
+                print("   ⚠️  Warmup TTS (Piper) falhou - áudio pode não funcionar")
+
+            # Initialize Supertonic TTS if configured
+            if voice_config.tts_engine == 'supertonic':
+                try:
+                    supertonic_tts_client = SupertonicTTSClient(voice_config)
+                    if supertonic_tts_client.is_available():
+                        print("   ✅ Supertonic TTS disponível e configurado")
+                    else:
+                        print("   ⚠️  Supertonic TTS não disponível, usando Piper como fallback")
+                        supertonic_tts_client = None
+                except Exception as e:
+                    print(f"   ⚠️  Supertonic TTS falhou: {e}, usando Piper como fallback")
+                    supertonic_tts_client = None
             
             print("\n" + "=" * 70)
             print("✅ SISTEMA PRONTO PARA USO!")
@@ -854,43 +874,35 @@ def api_rfid_scan():
 @app.route('/api/chat/send', methods=['POST'])
 def api_chat_send():
     """
-    Processa mensagem (texto ou voz) e retorna resposta com TTS
-    
-    Request JSON:
-        {
-            "message": "pergunta do usuário",
-            "rfid": "código RFID do usuário"
-        }
-    
-    Response JSON:
-        {
-            "success": true,
-            "response_text": "resposta da IA",
-            "audio_url": "/static/audio/tts_123456.wav",
-            "audio_duration": 3.5,
-            "conversation_context": [...],
-            "user": {...}
-        }
+    Processa mensagem com streaming SSE — retorna session_id para EventSource
+
+    Request JSON:  { "message": "...", "rfid": "..." }
+    Response JSON: { "success": true, "session_id": "uuid" }
+
+    Frontend then connects to GET /api/chat/stream/<session_id> for SSE events:
+      text_chunk        — {text: "..."}           (LLM token)
+      sentence_playing  — {text: "...", index: N}  (audio chunk started on hardware)
+      response_done     — {}                       (all audio finished)
+      error             — {error: "..."}
     """
     if not VOICE_ENABLED or not ollama_client or not tts_client:
         return jsonify({
             'success': False,
             'error': 'Sistema de voz não disponível'
         }), 503
-    
+
     try:
         data = request.get_json()
         user_message = data.get('message', '').strip()
         rfid = data.get('rfid', '')
-        
+
         if not user_message:
             return jsonify({'success': False, 'error': 'Mensagem vazia'}), 400
-        
-        # Modo anônimo vs usuário autenticado
+
+        # --- Resolve user & context (same logic as before) ---
         is_anonymous = (not rfid or rfid == 'anonymous')
-        
+
         if is_anonymous:
-            # Modo anônimo - sem histórico, configuração padrão
             print(f"🤖 [API] Modo anônimo ativado")
             user = None
             user_id = None
@@ -899,121 +911,137 @@ def api_chat_send():
 IMPORTANTE: Responda SEMPRE com no máximo 2-3 frases curtas (menos de 150 caracteres).
 Seja direto, objetivo e conciso."""
         else:
-            # Modo autenticado - busca usuário e histórico
             db = get_db()
             user = db.get_user_by_rfid(rfid)
-            
+
             if not user:
                 return jsonify({'success': False, 'error': 'Usuário não encontrado'}), 404
-            
+
             user_id = user['id']
-            
-            # Gerenciador de histórico
+
             history_manager = ConversationHistory(db)
-            
-            # Salva mensagem do usuário
             history_manager.add_message(user_id, 'user', user_message)
-            
-            # Recupera contexto de conversa (últimas 8 mensagens)
             conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
-            
-            # Monta system prompt baseado nas preferências do usuário
             system_prompt = _build_system_prompt(user)
-        
-        # Gera resposta com Ollama
-        user_name = user['name'] if user else 'Visitante'
-        print(f"🤖 [API] Gerando resposta para {user_name}...")
-        response_text = ollama_client.generate_response(
-            prompt=user_message,
-            system_prompt=system_prompt,
-            conversation_context=conversation_context
-        )
-        
-        if not response_text:
-            return jsonify({
-                'success': False,
-                'error': 'Erro ao gerar resposta'
-            }), 500
-        
-        # Salva resposta da IA (apenas se não for anônimo)
-        if not is_anonymous and user_id:
-            history_manager.add_message(user_id, 'assistant', response_text)
-        
-        # Gera áudio TTS
-        print(f"🔊 [API] Gerando áudio TTS...")
-        audio_url = tts_client.synthesize(response_text)
-        
-        if not audio_url:
-            # TTS falhou, mas retorna texto
-            print("⚠️  [API] Falha no TTS, retornando apenas texto")
-            
-            user_info = {
-                'id': user['id'],
-                'name': user['name'],
-                'response_style': user['response_style'],
-                'language': user['language']
-            } if user else {
-                'id': 0,
-                'name': 'Visitante',
-                'response_style': 'friendly',
-                'language': 'pt-BR'
-            }
-            
-            return jsonify({
-                'success': True,
-                'response_text': response_text,
-                'audio_url': None,
-                'audio_duration': 0,
-                'tts_error': True,
-                'user': user_info
-            })
-        
-        # Estima duração do áudio
-        audio_duration = tts_client._estimate_audio_duration(response_text)
-        
-        # Toca áudio no hardware (DEVE TOCAR AQUI - Sistema OFFLINE)
-        if audio_player and audio_player.is_available():
-            audio_file_path = os.path.join(voice_config.audio_static_dir, audio_url.replace('audio/', ''))
-            
-            # IMPORTANTE: blocking=False não funciona bem com pygame
-            # Precisamos usar threading para não bloquear a API
-            import threading
-            def play_audio_thread():
-                try:
-                    audio_player.play(audio_file_path, blocking=True)
-                except Exception as e:
-                    print(f"❌ [API] Erro ao reproduzir áudio: {e}")
-            
-            # Inicia reprodução em thread separada
-            audio_thread = threading.Thread(target=play_audio_thread, daemon=True)
-            audio_thread.start()
-            
-            print(f"🔊 [API] Reproduzindo áudio no hardware: {audio_file_path}")
+
+        # --- Create SSE session ---
+        session_id = sse_manager.create_session()
+
+        # --- Select TTS engine ---
+        if voice_config.tts_engine == 'supertonic' and supertonic_tts_client:
+            tts = supertonic_tts_client
         else:
-            print(f"⚠️  [API] Audio player não disponível!")
-        
-        print(f"✅ [API] Resposta completa gerada")
-        
-        user_info = {
-            'id': user['id'],
-            'name': user['name'],
-            'response_style': user['response_style'],
-            'language': user['language']
-        } if user else {
-            'id': 0,
-            'name': 'Visitante',
-            'response_style': 'friendly',
-            'language': 'pt-BR'
-        }
-        
+            tts = tts_client  # Piper fallback
+
+        # --- Background streaming pipeline ---
+        # Capture variables for the thread closure
+        _user_message = user_message
+        _system_prompt = system_prompt
+        _conversation_context = list(conversation_context) if conversation_context else []
+        _user = dict(user) if user else None
+        _user_id = user_id
+        _is_anonymous = is_anonymous
+        _db_path = DB_PATH
+
+        def streaming_pipeline():
+            try:
+                user_name = _user['name'] if _user else 'Visitante'
+                print(f"🤖 [SSE] Streaming resposta para {user_name}...")
+
+                # Set up audio queue
+                if audio_player and audio_player.is_available():
+                    sentence_index = [0]  # mutable counter for closure
+
+                    def on_chunk_start(metadata):
+                        text = metadata.get('text', '')
+                        sentence_index[0] += 1
+                        sse_manager.push_event(session_id, 'sentence_playing', {
+                            'text': text,
+                            'index': sentence_index[0]
+                        })
+
+                    def on_queue_complete():
+                        print(f"🎵 [SSE] All audio played for session {session_id[:8]}...")
+                        sse_manager.push_event(session_id, 'response_done', {})
+
+                    audio_player.on_chunk_start = on_chunk_start
+                    audio_player.on_queue_complete = on_queue_complete
+                    audio_player.start_queue_playback()
+
+                # Sentence detector for chunked TTS
+                sentence_detector = SentenceDetector(min_length=30)
+                full_response = ""
+
+                # Stream from Ollama
+                for chunk in ollama_client.generate_streaming_response(
+                    prompt=_user_message,
+                    system_prompt=_system_prompt,
+                    conversation_context=_conversation_context
+                ):
+                    if not chunk:
+                        continue
+
+                    full_response += chunk
+
+                    # Push text chunk to browser
+                    sse_manager.push_event(session_id, 'text_chunk', {'text': chunk})
+
+                    # Detect sentences and synthesize
+                    sentences = sentence_detector.add_chunk(chunk)
+                    for sentence in sentences:
+                        print(f"🎙️ [SSE] Synthesizing: {sentence[:60]}...")
+                        audio_file = tts.synthesize_to_temp(sentence)
+                        if audio_file and audio_player and audio_player.is_available():
+                            audio_player.enqueue_audio(audio_file, {
+                                'text': sentence,
+                                'cleanup': True
+                            })
+
+                # Flush remaining text
+                final_sentence = sentence_detector.flush()
+                if final_sentence:
+                    print(f"🎙️ [SSE] Final sentence: {final_sentence[:60]}...")
+                    audio_file = tts.synthesize_to_temp(final_sentence)
+                    if audio_file and audio_player and audio_player.is_available():
+                        audio_player.enqueue_audio(audio_file, {
+                            'text': final_sentence,
+                            'cleanup': True
+                        })
+
+                # Signal generation complete
+                if audio_player and audio_player.is_available():
+                    audio_player.signal_generation_complete()
+                else:
+                    # No audio player — send response_done immediately
+                    sse_manager.push_event(session_id, 'response_done', {})
+
+                # Save assistant response to DB
+                if not _is_anonymous and _user_id:
+                    try:
+                        from database import Database
+                        db_thread = Database(_db_path)
+                        history = ConversationHistory(db_thread)
+                        history.add_message(_user_id, 'assistant', full_response)
+                        db_thread.close()
+                    except Exception as e:
+                        print(f"⚠️  [SSE] Erro ao salvar resposta: {e}")
+
+                print(f"✅ [SSE] Pipeline completa ({len(full_response)} chars)")
+
+            except Exception as e:
+                print(f"❌ [SSE] Erro na pipeline: {e}")
+                import traceback
+                traceback.print_exc()
+                sse_manager.push_event(session_id, 'error', {'error': str(e)})
+
+        pipeline_thread = threading.Thread(target=streaming_pipeline, daemon=True, name="StreamingPipeline")
+        pipeline_thread.start()
+
         return jsonify({
             'success': True,
-            'response_text': response_text,
-            'audio_url': f'/static/{audio_url}',
-            'audio_duration': audio_duration,
-            'user': user_info
+            'session_id': session_id
         })
-        
+
     except Exception as e:
         print(f"❌ [API] Erro: {e}")
         import traceback
@@ -1022,6 +1050,112 @@ Seja direto, objetivo e conciso."""
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/chat/stream/<session_id>')
+def api_chat_stream(session_id):
+    """SSE stream endpoint — browser connects here with EventSource"""
+    return Response(
+        stream_with_context(sse_manager.stream_events(session_id)),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+@app.route('/api/chat/send_sync', methods=['POST'])
+def api_chat_send_sync():
+    """
+    FALLBACK: Blocking chat endpoint (original behavior)
+    Kept for backward compatibility during development.
+    """
+    if not VOICE_ENABLED or not ollama_client or not tts_client:
+        return jsonify({
+            'success': False,
+            'error': 'Sistema de voz não disponível'
+        }), 503
+
+    try:
+        data = request.get_json()
+        user_message = data.get('message', '').strip()
+        rfid = data.get('rfid', '')
+
+        if not user_message:
+            return jsonify({'success': False, 'error': 'Mensagem vazia'}), 400
+
+        is_anonymous = (not rfid or rfid == 'anonymous')
+
+        if is_anonymous:
+            user = None
+            user_id = None
+            conversation_context = []
+            system_prompt = """Você é um assistente virtual amigável e prestativo.
+IMPORTANTE: Responda SEMPRE com no máximo 2-3 frases curtas (menos de 150 caracteres).
+Seja direto, objetivo e conciso."""
+        else:
+            db = get_db()
+            user = db.get_user_by_rfid(rfid)
+
+            if not user:
+                return jsonify({'success': False, 'error': 'Usuário não encontrado'}), 404
+
+            user_id = user['id']
+            history_manager = ConversationHistory(db)
+            history_manager.add_message(user_id, 'user', user_message)
+            conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
+            system_prompt = _build_system_prompt(user)
+
+        user_name = user['name'] if user else 'Visitante'
+        print(f"🤖 [API/sync] Gerando resposta para {user_name}...")
+        response_text = ollama_client.generate_response(
+            prompt=user_message,
+            system_prompt=system_prompt,
+            conversation_context=conversation_context
+        )
+
+        if not response_text:
+            return jsonify({'success': False, 'error': 'Erro ao gerar resposta'}), 500
+
+        if not is_anonymous and user_id:
+            history_manager.add_message(user_id, 'assistant', response_text)
+
+        audio_url = tts_client.synthesize(response_text)
+
+        if not audio_url:
+            user_info = {
+                'id': user['id'], 'name': user['name'],
+                'response_style': user['response_style'], 'language': user['language']
+            } if user else {'id': 0, 'name': 'Visitante', 'response_style': 'friendly', 'language': 'pt-BR'}
+
+            return jsonify({
+                'success': True, 'response_text': response_text,
+                'audio_url': None, 'audio_duration': 0, 'tts_error': True, 'user': user_info
+            })
+
+        audio_duration = tts_client._estimate_audio_duration(response_text)
+
+        if audio_player and audio_player.is_available():
+            audio_file_path = os.path.join(voice_config.audio_static_dir, audio_url.replace('audio/', ''))
+            threading.Thread(target=lambda: audio_player.play(audio_file_path, blocking=True), daemon=True).start()
+
+        user_info = {
+            'id': user['id'], 'name': user['name'],
+            'response_style': user['response_style'], 'language': user['language']
+        } if user else {'id': 0, 'name': 'Visitante', 'response_style': 'friendly', 'language': 'pt-BR'}
+
+        return jsonify({
+            'success': True, 'response_text': response_text,
+            'audio_url': f'/static/{audio_url}', 'audio_duration': audio_duration, 'user': user_info
+        })
+
+    except Exception as e:
+        print(f"❌ [API/sync] Erro: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/chat/history/<rfid>', methods=['GET'])
