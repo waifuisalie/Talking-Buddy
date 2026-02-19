@@ -73,12 +73,19 @@ else
     echo -e "${GREEN}✓${NC} Ollama já está rodando"
 fi
 
-# Verificar modelo
-if ! ollama list | grep -q "gemma3:1b\|gemma3-ptbr"; then
+# Verificar modelo (accept base model or any personality model)
+if ! ollama list | grep -qE "gemma3:1b|gemma3-ptbr|qwen2\.5.*-ptbr|llama3\.2.*-ptbr"; then
     echo -e "${YELLOW}⚠️  Nenhum modelo encontrado. Baixando gemma3:1b...${NC}"
     ollama pull gemma3:1b
 fi
-echo -e "${GREEN}✓${NC} Modelo Ollama disponível"
+
+# Count personality models
+PERSONALITY_COUNT=$(ollama list | grep -cE "(gemma3|qwen2\.5|llama3\.2).*-ptbr-" 2>/dev/null || echo "0")
+if [ "$PERSONALITY_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}✓${NC} Modelo Ollama disponível ($PERSONALITY_COUNT personalidades)"
+else
+    echo -e "${GREEN}✓${NC} Modelo Ollama disponível (sem personalidades - usando modelo base)"
+fi
 
 # ============================================================================
 # 3. VERIFICAR AMBIENTE PYTHON
@@ -115,6 +122,16 @@ if ! python3 -c "import pyaudio" 2>/dev/null; then
     echo "🔄 Instalando PyAudio (reconhecimento de voz)..."
     pip install pyaudio
     echo -e "${GREEN}✓${NC} PyAudio instalado"
+fi
+
+# Verificar Supertonic TTS (opcional, mas recomendado)
+if python3 -c "import supertonic" 2>/dev/null; then
+    SUPERTONIC_AVAILABLE=true
+    echo -e "${GREEN}✓${NC} Supertonic 2 TTS disponível (multilingual, 9x mais rápido)"
+else
+    SUPERTONIC_AVAILABLE=false
+    echo -e "${YELLOW}⚠️  Supertonic 2 TTS não instalado (usando Piper como fallback)${NC}"
+    echo "   Para instalar: pip install supertonic"
 fi
 
 # ============================================================================
@@ -181,16 +198,24 @@ echo -e "  ${GREEN}http://localhost:5000${NC}"
 echo ""
 echo -e "${BLUE}Funcionalidades disponíveis:${NC}"
 echo "  • Cadastro de usuários via RFID"
-echo "  • Interface de chat com robô"
-echo "  • Integração de voz (TTS com Piper)"
-echo "  • Reconhecimento de voz (STT com Whisper)"
-echo "  • Conversas com IA (Ollama)"
+echo "  • Interface de chat com robô (animação SSE em tempo real)"
+echo "  • Integração de voz (TTS com Piper ou Supertonic)"
+echo "  • Reconhecimento de voz (STT com Whisper + Mean VAD)"
+echo "  • Conversas com IA (Ollama + streaming)"
+echo "  • Sistema de personalidades (9 estilos de resposta)"
 echo "  • Histórico de conversas (SQLite)"
 echo ""
-echo -e "${YELLOW}Dispositivos de áudio configurados:${NC}"
-echo "  • Saída: adaptador P2 USB (Card 3)"
-echo "  • Entrada: microfone USB (Card 2)"
-echo "  • Execute test_audio_devices.py para reconfigurar"
+echo -e "${YELLOW}Configuração de TTS:${NC}"
+if [ "$SUPERTONIC_AVAILABLE" = true ]; then
+    echo "  • Engine: Supertonic 2 (multilingual, 9x mais rápido)"
+    echo "  • Fallback: Piper (português)"
+else
+    echo "  • Engine: Piper (português)"
+    echo "  • Supertonic: Não instalado (pip install supertonic)"
+fi
+echo ""
+echo -e "${YELLOW}Dispositivos de áudio:${NC}"
+echo "  • Execute test_audio_devices.py para configurar"
 echo ""
 echo -e "${BLUE}Logs do sistema aparecerão abaixo:${NC}"
 echo -e "${BLUE}======================================================================${NC}"

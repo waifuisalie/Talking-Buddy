@@ -24,7 +24,7 @@ echo ""
 
 # Phase tracking
 CURRENT_PHASE=""
-TOTAL_PHASES=8
+TOTAL_PHASES=10
 
 # Error handling function
 handle_error() {
@@ -121,7 +121,7 @@ echo ""
 # ============================================================================
 # PHASE 1: SYSTEM DEPENDENCIES
 # ============================================================================
-CURRENT_PHASE="Phase 1/8: Installing system dependencies"
+CURRENT_PHASE="Phase 1/10: Installing system dependencies"
 echo "📦 $CURRENT_PHASE..."
 
 # Check internet connection
@@ -159,7 +159,7 @@ fi
 
 # Install build tools and libraries
 echo "🔄 Installing build tools and libraries..."
-if ! sudo apt install -y build-essential cmake git wget curl portaudio19-dev libsdl2-dev libasound2-dev; then
+if ! sudo apt install -y build-essential cmake git wget curl portaudio19-dev libsdl2-dev libasound2-dev libfreetype6-dev libpng-dev libjpeg-dev; then
     show_error "Failed to install system packages" \
                "Check network connection and available disk space"
     echo ""
@@ -185,7 +185,7 @@ echo "✅ System dependencies installed successfully"
 # ============================================================================
 # PHASE 2: WHISPER.CPP
 # ============================================================================
-CURRENT_PHASE="Phase 2/8: Installing whisper.cpp"
+CURRENT_PHASE="Phase 2/10: Installing whisper.cpp"
 echo ""
 echo "🎤 $CURRENT_PHASE..."
 
@@ -283,7 +283,7 @@ fi
 # ============================================================================
 # PHASE 3: PIPER TTS
 # ============================================================================
-CURRENT_PHASE="Phase 3/8: Installing Piper TTS"
+CURRENT_PHASE="Phase 3/10: Installing Piper TTS"
 echo ""
 echo "🔊 $CURRENT_PHASE..."
 
@@ -380,7 +380,7 @@ fi
 # ============================================================================
 # PHASE 4: OLLAMA INSTALLATION
 # ============================================================================
-CURRENT_PHASE="Phase 4/8: Installing Ollama"
+CURRENT_PHASE="Phase 4/10: Installing Ollama"
 echo ""
 echo "🧠 $CURRENT_PHASE..."
 
@@ -468,7 +468,7 @@ done
 # ============================================================================
 # PHASE 5: OLLAMA MODELS
 # ============================================================================
-CURRENT_PHASE="Phase 5/8: Downloading Ollama models"
+CURRENT_PHASE="Phase 5/10: Downloading Ollama models"
 echo ""
 echo "📥 $CURRENT_PHASE..."
 
@@ -521,7 +521,7 @@ fi
 # ============================================================================
 # PHASE 6: PYTHON ENVIRONMENT SETUP
 # ============================================================================
-CURRENT_PHASE="Phase 6/8: Setting up Python environment"
+CURRENT_PHASE="Phase 6/10: Setting up Python environment"
 echo ""
 echo "🐍 $CURRENT_PHASE..."
 
@@ -694,7 +694,7 @@ echo "✅ All critical packages verified"
 # ============================================================================
 # PHASE 7: PERSONALITY MODEL CREATION
 # ============================================================================
-CURRENT_PHASE="Phase 7/8: Creating personality models"
+CURRENT_PHASE="Phase 7/10: Creating personality models"
 echo ""
 echo "🎯 $CURRENT_PHASE..."
 
@@ -784,9 +784,294 @@ fi
 echo "✅ Verified $PERSONALITY_COUNT personality model(s)"
 
 # ============================================================================
-# PHASE 8: VERIFY INSTALLATION
+# PHASE 8: SYSTEM-INTERFACE SETUP
 # ============================================================================
-CURRENT_PHASE="Phase 8/8: Verifying installation"
+CURRENT_PHASE="Phase 8/10: Setting up system-interface"
+echo ""
+echo "🌐 $CURRENT_PHASE..."
+
+# Navigate to system-interface directory
+INTERFACE_DIR="$(dirname "$SCRIPT_DIR")/system-interface"
+
+if ! check_directory "$INTERFACE_DIR"; then
+    show_error "system-interface directory not found" \
+               "Directory structure may be incomplete"
+    echo "   Expected: $INTERFACE_DIR"
+    exit 1
+fi
+
+cd "$INTERFACE_DIR"
+
+# Check requirements.txt
+if ! check_file "requirements.txt"; then
+    show_error "system-interface/requirements.txt not found"
+    exit 1
+fi
+
+# Check .env file, create from .env.example if needed
+if [ ! -f ".env" ]; then
+    if check_file ".env.example"; then
+        echo "🔄 Creating .env from .env.example..."
+        cp .env.example .env
+
+        # Update paths in .env
+        echo "🔄 Configuring .env with correct paths..."
+        sed -i "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env
+        sed -i "s|~/piper/piper/|$HOME/piper/piper/|g" .env
+
+        echo "✅ .env file created and configured"
+    else
+        show_error ".env.example not found in system-interface" \
+                   "Cannot create configuration file"
+        exit 1
+    fi
+else
+    echo "⏭️  .env file already exists"
+fi
+
+# Install Python dependencies for system-interface
+echo "🔄 Installing system-interface Python packages..."
+
+# Check if venv exists in system-interface
+if [ ! -d "venv" ]; then
+    echo "🔄 Creating virtual environment for system-interface..."
+    if ! python3 -m venv venv; then
+        show_error "Failed to create venv for system-interface"
+        exit 1
+    fi
+fi
+
+# Activate system-interface venv
+source venv/bin/activate
+
+# Install dependencies
+if ! pip install -r requirements.txt; then
+    show_error "Failed to install system-interface packages" \
+               "Check requirements.txt and network connection"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  - Try manual install: pip install flask pygame requests python-dotenv"
+    exit 1
+fi
+
+# Verify critical packages
+INTERFACE_PACKAGES=("flask" "pygame" "requests" "dotenv")
+for pkg in "${INTERFACE_PACKAGES[@]}"; do
+    if ! python -c "import $pkg" 2>/dev/null; then
+        show_error "Package $pkg not installed" \
+                   "Installation may have failed"
+        exit 1
+    fi
+done
+
+echo "✅ System-interface packages installed"
+
+# Create necessary directories
+echo "🔄 Creating required directories..."
+mkdir -p data
+mkdir -p static/audio
+
+# Initialize database if needed
+if [ ! -f "data/users.db" ]; then
+    echo "🔄 Initializing database..."
+    if [ -f "src/init_system.py" ]; then
+        python src/init_system.py
+        echo "✅ Database initialized"
+    else
+        echo "⚠️  init_system.py not found, database will be created on first run"
+    fi
+else
+    echo "⏭️  Database already exists"
+fi
+
+# Verify app.py exists
+if ! check_file "src/app.py"; then
+    show_error "system-interface/src/app.py not found" \
+               "Core application file is missing"
+    exit 1
+fi
+
+# Test voice system integration
+echo "🔄 Testing voice system integration..."
+if [ -f "test_voice_system.py" ]; then
+    if python test_voice_system.py; then
+        echo "✅ Voice system tests passed"
+    else
+        echo "⚠️  Some voice system tests failed (non-fatal)"
+        echo "   System will still work, but voice features may be limited"
+    fi
+else
+    echo "⚠️  test_voice_system.py not found, skipping voice tests"
+fi
+
+echo "✅ System-interface setup complete"
+
+# Deactivate system-interface venv
+deactivate
+
+# Return to script directory
+cd "$SCRIPT_DIR"
+
+# Reactivate rpi5-chatbot venv
+source venv/bin/activate
+
+# ============================================================================
+# PHASE 9: HARDWARE CONFIGURATION (RFID, Audio, Permissions)
+# ============================================================================
+CURRENT_PHASE="Phase 9/10: Configuring hardware (RFID/SPI, Audio, Permissions)"
+echo ""
+echo "🔧 $CURRENT_PHASE..."
+
+# ------------------------------
+# 1. Enable SPI for RFID/MFRC522
+# ------------------------------
+echo "🔄 Configuring SPI for RFID..."
+
+if ! grep -q "^dtparam=spi=on" /boot/firmware/config.txt 2>/dev/null && \
+   ! grep -q "^dtparam=spi=on" /boot/config.txt 2>/dev/null; then
+    echo "   Enabling SPI interface..."
+
+    # Try both possible locations for config.txt
+    if [ -f "/boot/firmware/config.txt" ]; then
+        CONFIG_FILE="/boot/firmware/config.txt"
+    elif [ -f "/boot/config.txt" ]; then
+        CONFIG_FILE="/boot/config.txt"
+    else
+        echo "⚠️  Warning: Could not find config.txt"
+        echo "   SPI may need to be enabled manually:"
+        echo "   sudo raspi-config -> Interface Options -> SPI -> Enable"
+        CONFIG_FILE=""
+    fi
+
+    if [ -n "$CONFIG_FILE" ]; then
+        # Backup config file
+        sudo cp "$CONFIG_FILE" "${CONFIG_FILE}.backup"
+
+        # Enable SPI
+        if grep -q "^#dtparam=spi=on" "$CONFIG_FILE"; then
+            sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' "$CONFIG_FILE"
+        else
+            echo "dtparam=spi=on" | sudo tee -a "$CONFIG_FILE" > /dev/null
+        fi
+
+        echo "✅ SPI enabled in $CONFIG_FILE"
+        echo "   ⚠️  NOTE: SPI will be active after reboot"
+    fi
+else
+    echo "⏭️  SPI already enabled"
+fi
+
+# Check if SPI device exists (will only exist after reboot if just enabled)
+if [ -e "/dev/spidev0.0" ]; then
+    echo "✅ SPI device /dev/spidev0.0 available"
+else
+    echo "⚠️  SPI device not found (may require reboot)"
+fi
+
+# ------------------------------
+# 2. Configure User Permissions
+# ------------------------------
+echo "🔄 Configuring user permissions..."
+
+# Add user to necessary groups
+GROUPS_TO_ADD=("spi" "gpio" "dialout" "audio")
+ADDED_ANY=false
+
+for group in "${GROUPS_TO_ADD[@]}"; do
+    if getent group "$group" > /dev/null 2>&1; then
+        if ! groups | grep -q "\b$group\b"; then
+            echo "   Adding user to $group group..."
+            sudo usermod -a -G "$group" "$USER"
+            ADDED_ANY=true
+        fi
+    fi
+done
+
+if [ "$ADDED_ANY" = true ]; then
+    echo "✅ User added to hardware groups"
+    echo "   ⚠️  NOTE: Group changes will be active after logout/login or reboot"
+else
+    echo "⏭️  User already in all necessary groups"
+fi
+
+# ------------------------------
+# 3. Configure Audio Devices
+# ------------------------------
+echo "🔄 Detecting and configuring audio devices..."
+
+echo "   Available audio devices:"
+aplay -l 2>/dev/null | grep "^card" || echo "   No audio devices found"
+
+if pgrep -x "pulseaudio" > /dev/null; then
+    echo "⚠️  PulseAudio is running - may interfere with direct ALSA access"
+    echo "   If you experience audio issues, consider:"
+    echo "   systemctl --user stop pulseaudio.socket pulseaudio.service"
+fi
+
+if command -v speaker-test &> /dev/null; then
+    echo "   Testing audio output (2 second test)..."
+    timeout 2 speaker-test -t sine -f 1000 -c 2 &> /dev/null || true
+    echo "✅ Audio output test completed"
+else
+    echo "⏭️  speaker-test not available, skipping audio test"
+fi
+
+# ------------------------------
+# 4. Create Audio Test Script
+# ------------------------------
+echo "🔄 Creating audio configuration helper..."
+
+cat > "$INTERFACE_DIR/test_audio_devices.py" << 'ENDAUDIO'
+#!/usr/bin/env python3
+"""
+Audio Device Detector and Configurator
+Helps identify and configure the correct audio devices
+"""
+import pyaudio
+import sys
+
+def list_audio_devices():
+    p = pyaudio.PyAudio()
+    print("\n Available Audio Devices:\n")
+    print(f"{'Index':<6} {'Name':<50} {'Channels':<10} {'Type'}")
+    print("-" * 80)
+
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        channels = info.get('maxInputChannels') if info.get('maxInputChannels') > 0 else info.get('maxOutputChannels')
+        dev_type = "Input" if info.get('maxInputChannels') > 0 else "Output"
+        print(f"{i:<6} {info['name']:<50} {channels:<10} {dev_type}")
+
+    p.terminate()
+    print("\n")
+
+if __name__ == "__main__":
+    list_audio_devices()
+    print("To configure audio:")
+    print("1. Identify your output device (speaker/headphone) index")
+    print("2. Identify your input device (microphone) index")
+    print("3. Update .env file with ALSA device strings")
+    print("   Example: AUDIO_DEVICE=plughw:3,0")
+ENDAUDIO
+
+chmod +x "$INTERFACE_DIR/test_audio_devices.py"
+echo "✅ Audio test script created: test_audio_devices.py"
+
+echo "✅ Hardware configuration complete"
+echo ""
+echo "Important Notes:"
+echo "  SPI for RFID: Enabled (active after reboot)"
+echo "  User Groups: Updated (active after logout/login)"
+echo "  Audio: Use test_audio_devices.py to configure"
+echo ""
+echo "  If this is first setup, please REBOOT after installation:"
+echo "  sudo reboot"
+echo ""
+
+# ============================================================================
+# PHASE 10: VERIFY INSTALLATION
+# ============================================================================
+CURRENT_PHASE="Phase 10/10: Verifying installation"
 echo ""
 echo "✅ $CURRENT_PHASE..."
 
@@ -853,37 +1138,52 @@ echo "✅ Ollama (LLM service)"
 echo "   └─ Service: Active"
 echo "   └─ Base model: gemma3:1b"
 echo "   └─ Personalities: $PERSONALITY_COUNT models created"
-echo "✅ Python environment"
+echo "✅ Python environment (rpi5-chatbot)"
 echo "   └─ Location: ./venv"
 echo "   └─ Packages: pygame, requests, numpy, pyaudio, pyserial, psutil, supertonic"
+echo "✅ System-interface (Web UI)"
+echo "   └─ Location: ../system-interface"
+echo "   └─ Database: Initialized"
+echo "   └─ Voice integration: Configured"
+echo "✅ Hardware configuration"
+echo "   └─ SPI/RFID: Configured"
+echo "   └─ User groups: spi, gpio, dialout, audio"
 echo ""
 echo "Next Steps:"
-echo "1. Test with different personalities (keyboard mode):"
+echo ""
+echo "1. Start the Web UI (recommended):"
+echo "   cd ../system-interface"
+echo "   bash start.sh"
+echo "   Then open browser: http://localhost:5000"
+echo ""
+echo "2. Test with different personalities (keyboard mode):"
 echo "   cd rpi5-chatbot"
 echo "   source venv/bin/activate"
 echo "   python src/run_chatbot.py --wake-mode keyboard --personality casual"
 echo "   python src/run_chatbot.py --wake-mode keyboard --personality humorous --language en"
 echo ""
-echo "2. Test with Supertonic TTS (9x faster, multilingual):"
+echo "3. Test with Supertonic TTS (9x faster, multilingual):"
 echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language pt"
 echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language en --personality formal"
 echo ""
-echo "3. For production with ESP32 wake word:"
+echo "4. For production with ESP32 wake word:"
 echo "   python src/run_chatbot.py --wake-mode serial --personality casual --tts-engine supertonic"
 echo ""
-echo "4. View available personalities:"
+echo "5. View available personalities:"
 echo "   python src/run_chatbot.py --list-personalities"
 echo ""
-echo "5. View all available commands:"
+echo "6. View all available commands:"
 echo "   python src/run_chatbot.py --help"
 echo ""
 echo "Troubleshooting:"
 echo "  - Setup log: $LOG_FILE"
 echo "  - Test system: python src/run_chatbot.py --test"
+echo "  - Test voice: cd ../system-interface && python test_voice_system.py"
 echo "  - Check Ollama: systemctl status ollama"
 echo "  - Check models: ollama list"
 echo "  - List personalities: python src/run_chatbot.py --list-personalities"
 echo "  - List audio devices: python src/run_chatbot.py --list-devices"
+echo "  - Web interface logs: Check terminal output when running start.sh"
 echo ""
 echo "Documentation: README.md"
 echo ""
