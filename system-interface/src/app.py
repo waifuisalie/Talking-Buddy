@@ -36,7 +36,8 @@ import atexit
 try:
     from voice_assistant import (VoiceConfig, OllamaClient, TTSClient, HardwareAudioPlayer,
                                   ConversationHistory, SupertonicTTSClient, SentenceDetector,
-                                  StreamingTTSProcessor)
+                                  StreamingTTSProcessor, PersonalityManager)
+    from voice_assistant.supertonic_tts_client import PERSONALITY_VOICES
     VOICE_ENABLED = True
     print("✅ Módulo de voz carregado")
 except ImportError as e:
@@ -201,6 +202,7 @@ voice_config = None
 ollama_client = None
 tts_client = None
 supertonic_tts_client = None  # Supertonic TTS (optional)
+personality_manager = None    # Personality system
 audio_player = None
 whisper_stt = None  # Whisper STT (reconhecimento de voz)
 
@@ -291,7 +293,16 @@ if VOICE_ENABLED:
                 except Exception as e:
                     print(f"   ⚠️  Supertonic TTS falhou: {e}, usando Piper como fallback")
                     supertonic_tts_client = None
-            
+
+            # Initialize Personality Manager
+            try:
+                personality_manager = PersonalityManager()
+                count = len(personality_manager.personalities)
+                print(f"   ✅ Personality Manager: {count} personalidades carregadas")
+            except Exception as e:
+                print(f"   ⚠️  Personality Manager falhou: {e}")
+                personality_manager = None
+
             print("\n" + "=" * 70)
             print("✅ SISTEMA PRONTO PARA USO!")
             print("=" * 70)
@@ -927,11 +938,23 @@ Seja direto, objetivo e conciso."""
         # --- Create SSE session ---
         session_id = sse_manager.create_session()
 
-        # --- Select TTS engine ---
+        # --- Resolve personality for TTS voice + Ollama model ---
+        personality_id = _resolve_personality_for_user(user)
+
+        # Select TTS engine and set personality voice
         if voice_config.tts_engine == 'supertonic' and supertonic_tts_client:
+            supertonic_tts_client.config.supertonic_personality = personality_id
             tts = supertonic_tts_client
         else:
             tts = tts_client  # Piper fallback
+
+        # Resolve Ollama model name (personality model if available)
+        if personality_manager and not is_anonymous:
+            ollama_model = personality_manager.resolve_model_name(
+                voice_config.ollama_model, personality_id
+            )
+        else:
+            ollama_model = voice_config.ollama_model
 
         # --- Background streaming pipeline ---
         # Capture variables for the thread closure
@@ -942,6 +965,7 @@ Seja direto, objetivo e conciso."""
         _user_id = user_id
         _is_anonymous = is_anonymous
         _db_path = DB_PATH
+        _ollama_model = ollama_model
 
         def streaming_pipeline():
             try:
@@ -972,11 +996,12 @@ Seja direto, objetivo e conciso."""
                 sentence_detector = SentenceDetector(min_length=30)
                 full_response = ""
 
-                # Stream from Ollama
+                # Stream from Ollama (using personality model if resolved)
                 for chunk in ollama_client.generate_streaming_response(
                     prompt=_user_message,
                     system_prompt=_system_prompt,
-                    conversation_context=_conversation_context
+                    conversation_context=_conversation_context,
+                    model=_ollama_model
                 ):
                     if not chunk:
                         continue
@@ -1504,17 +1529,36 @@ def api_wake_word_status():
     })
 
 
+# Mapping from DB response_style values to personality IDs
+RESPONSE_STYLE_TO_PERSONALITY = {
+    'short (objective)': 'short',
+    'neutral (balanced)': 'neutral',
+    'detailed (explanatory)': 'detailed',
+    'formal (business)': 'formal',
+    'casual (chatty)': 'casual',
+}
+
+
 def _build_system_prompt(user) -> str:
     """
-    Constrói system prompt baseado nas preferências do usuário
-    
+    Constrói system prompt baseado nas preferências do usuário.
+    Uses personality system if available, falls back to hardcoded prompts.
+
     Args:
         user: Row do banco com dados do usuário
-    
+
     Returns:
         System prompt customizado
     """
-    # Mapeia response_style para instruções
+    # Try personality system first
+    personality_id = RESPONSE_STYLE_TO_PERSONALITY.get(user['response_style'], 'neutral')
+
+    if personality_manager:
+        personality = personality_manager.get_personality(personality_id)
+        if personality and 'system_prompt' in personality:
+            return personality['system_prompt'].strip()
+
+    # Fallback: hardcoded prompts (same as before)
     style_instructions = {
         'short (objective)': 'Seja breve e objetivo. Respostas curtas e diretas.',
         'neutral (balanced)': 'Mantenha equilíbrio entre brevidade e explicação.',
@@ -1522,24 +1566,28 @@ def _build_system_prompt(user) -> str:
         'formal (business)': 'Use linguagem formal e profissional.',
         'casual (chatty)': 'Use linguagem casual e amigável, como em uma conversa.'
     }
-    
-    # Mapeia language para idioma
+
     language_map = {
         'pt-BR': 'português brasileiro',
         'en-US': 'inglês',
         'es-ES': 'espanhol'
     }
-    
+
     style = style_instructions.get(user['response_style'], style_instructions['neutral (balanced)'])
     language = language_map.get(user['language'], 'português brasileiro')
-    
-    system_prompt = f"""Você é um assistente virtual útil e prestativo.
+
+    return f"""Você é um assistente virtual útil e prestativo.
 Sempre responda em {language}.
 {style}
-IMPORTANTE: Limite suas respostas a no máximo 2-3 frases (150 caracteres) para TESTE.
 Seja natural e mantenha o contexto da conversa."""
-    
-    return system_prompt
+
+
+def _resolve_personality_for_user(user) -> str:
+    """Resolve personality ID from user's response_style."""
+    return RESPONSE_STYLE_TO_PERSONALITY.get(
+        user['response_style'] if user else 'neutral (balanced)',
+        'neutral'
+    )
 
 
 # ========== ERRO 404 ==========

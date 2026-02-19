@@ -82,23 +82,27 @@ class OllamaClient:
             return None
     
     def generate_streaming_response(self, prompt: str, system_prompt: Optional[str] = None,
-                                   conversation_context: Optional[list] = None) -> Generator[str, None, None]:
+                                   conversation_context: Optional[list] = None,
+                                   model: Optional[str] = None) -> Generator[str, None, None]:
         """
         Gera resposta em streaming (yields chunks)
-        
+
         Args:
             prompt: Mensagem do usuário
             system_prompt: Prompt de sistema (opcional)
             conversation_context: Lista de mensagens anteriores
-        
+            model: Override model name (optional, defaults to config)
+
         Yields:
             Chunks de texto conforme são gerados
         """
         try:
             messages = self._build_messages(prompt, system_prompt, conversation_context)
-            
+
+            use_model = model or self.config.ollama_model
+
             payload = {
-                "model": self.config.ollama_model,
+                "model": use_model,
                 "messages": messages,
                 "stream": True,
                 "options": {
@@ -106,8 +110,8 @@ class OllamaClient:
                     "num_predict": self.config.ollama_max_tokens
                 }
             }
-            
-            print(f"🤖 [Ollama] Streaming com {self.config.ollama_model}...")
+
+            print(f"🤖 [Ollama] Streaming com {use_model}...")
             
             response = requests.post(
                 self.config.ollama_url,

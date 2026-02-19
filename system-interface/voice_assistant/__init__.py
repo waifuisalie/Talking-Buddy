@@ -10,6 +10,7 @@ from .audio_player import HardwareAudioPlayer
 from .conversation_history import ConversationHistory
 from .supertonic_tts_client import SupertonicTTSClient
 from .streaming import SentenceDetector, StreamingTTSProcessor
+from .personality_manager import PersonalityManager
 
 __all__ = [
     'VoiceConfig',
@@ -20,4 +21,5 @@ __all__ = [
     'SupertonicTTSClient',
     'SentenceDetector',
     'StreamingTTSProcessor',
+    'PersonalityManager',
 ]
