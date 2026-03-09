@@ -29,6 +29,7 @@ class HardwareAudioPlayer:
         self.enqueued_count = 0
         self.played_count = 0
         self.on_chunk_start = None      # callback(metadata) when chunk starts playing
+        self.on_chunk_end = None        # callback(metadata) when chunk finishes playing
         self.on_queue_complete = None    # callback() when all chunks done
 
         self._initialize_pygame()
@@ -293,6 +294,13 @@ class HardwareAudioPlayer:
 
                     # Play audio blocking
                     self.play(audio_file, blocking=True)
+
+                    # Call on_chunk_end callback
+                    if self.on_chunk_end:
+                        try:
+                            self.on_chunk_end(metadata)
+                        except Exception as e:
+                            print(f"❌ Error in on_chunk_end callback: {e}")
 
                     self.played_count += 1
 

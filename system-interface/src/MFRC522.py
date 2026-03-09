@@ -32,7 +32,7 @@
 
 
 
-import spidev 
+import spidev
 import signal
 import time
 
@@ -139,10 +139,10 @@ class MFRC522:
 
   serNum = []
 
-  def __init__(self, bus=0,dev=0, spd=1000000):
-    self.spi=spidev.SpiDev()
-    self.spi.open(bus=bus,device=dev)
-    self.spi.max_speed_hz=spd
+  def __init__(self, bus=0, dev=0, spd=1000000):
+    self.spi = spidev.SpiDev()
+    self.spi.open(bus=bus, device=dev)
+    self.spi.max_speed_hz = spd
     self.MFRC522_Init()
 
   def MFRC522_Reset(self):

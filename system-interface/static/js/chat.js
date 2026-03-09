@@ -453,20 +453,21 @@ class ChatManager {
             eventSource.addEventListener('text_chunk', (e) => {
                 const { text } = JSON.parse(e.data);
 
-                // Clear "Pensando..." on first chunk
+                // Clear "Pensando..." on first chunk but don't show text yet.
+                // Text is displayed in sync with audio via sentence_playing below.
                 if (!thinkingCleared) {
                     messageDiv.innerHTML = '';
                     thinkingCleared = true;
                 }
-
-                // Append text (real streaming typewriter)
-                messageDiv.textContent += text;
-                this.scrollToBottom();
             });
 
             eventSource.addEventListener('sentence_playing', (e) => {
                 const { text, index } = JSON.parse(e.data);
                 console.log(`🔊 [SSE] Sentence ${index} playing on hardware: ${text.substring(0, 50)}...`);
+
+                // Show sentence text in sync with hardware audio playback
+                messageDiv.textContent += (messageDiv.textContent ? ' ' : '') + text;
+                this.scrollToBottom();
 
                 // Set robot to speaking state
                 if (window.robotAvatar) {
@@ -475,6 +476,15 @@ class ChatManager {
                         isSpeaking = true;
                     }
                     window.robotAvatar.speakText(text);
+                }
+            });
+
+            eventSource.addEventListener('sentence_done', (e) => {
+                // A sentence finished playing on hardware — stop mouth animation
+                // until the next sentence_playing event arrives.
+                if (window.robotAvatar) {
+                    window.robotAvatar.stopSpeaking();
+                    isSpeaking = false;
                 }
             });
 

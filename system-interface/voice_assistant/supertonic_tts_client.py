@@ -12,18 +12,33 @@ import numpy as np
 
 from .voice_config import VoiceConfig
 
-# Personality-to-Voice mapping (9 personalities -> 8 unique voices)
-PERSONALITY_VOICES = {
-    "short": "M1",       # Brief -> professional male
-    "detailed": "F3",    # Thorough -> patient female
-    "casual": "F1",      # Friendly -> warm female
-    "neutral": "M2",     # Default -> neutral male
-    "formal": "M3",      # Professional -> authoritative male
-    "humorous": "F2",    # Witty -> energetic female
-    "empathetic": "F4",  # Understanding -> caring female
-    "educational": "F3", # Teaching -> SHARES with 'detailed' (patient female)
-    "storyteller": "F5"  # Narrative -> expressive female
+# Personality-to-Voice mappings, one per gender
+PERSONALITY_VOICES_MALE = {
+    "short":       "M1",
+    "neutral":     "M2",
+    "detailed":    "M3",
+    "formal":      "M3",
+    "casual":      "M1",
+    "humorous":    "M2",
+    "empathetic":  "M2",
+    "educational": "M3",
+    "storyteller": "M1",
 }
+
+PERSONALITY_VOICES_FEMALE = {
+    "short":       "F1",
+    "neutral":     "F1",
+    "detailed":    "F3",
+    "formal":      "F2",
+    "casual":      "F1",
+    "humorous":    "F2",
+    "empathetic":  "F4",
+    "educational": "F3",
+    "storyteller": "F5",
+}
+
+# Backwards-compat alias (male voices as default)
+PERSONALITY_VOICES = PERSONALITY_VOICES_MALE
 
 
 class SupertonicTTSClient:
@@ -53,7 +68,10 @@ class SupertonicTTSClient:
             print(f"❌ Failed to initialize Supertonic TTS: {e}")
             return False
 
-    def synthesize(self, text: str, output_file: Optional[str] = None) -> Optional[str]:
+    def synthesize(self, text: str, output_file: Optional[str] = None,
+                   personality_id: Optional[str] = None,
+                   language: Optional[str] = None,
+                   gender: Optional[str] = None) -> Optional[str]:
         """Convert text to speech and return the audio file path"""
         try:
             if not self._initialize_tts():
@@ -69,15 +87,29 @@ class SupertonicTTSClient:
                 timestamp = int(time.time() * 1000)
                 output_file = f"{self.config.temp_dir}/tts_response_{timestamp}.wav"
 
-            voice_id = PERSONALITY_VOICES.get(self.config.supertonic_personality, "M2")
+            resolved_personality = personality_id or self.config.supertonic_personality
+            resolved_gender = gender or "male"
+            voice_map = (PERSONALITY_VOICES_FEMALE
+                         if resolved_gender == "female"
+                         else PERSONALITY_VOICES_MALE)
+            voice_id = voice_map.get(resolved_personality, "M2")
+
+            # Fallback default should match gender
+            if resolved_personality not in voice_map:
+                fallback_id = "F1" if resolved_gender == "female" else "M2"
+                voice_id = fallback_id
+                print(f"🎤 [SUPERTONIC] ⚠️  Personality '{resolved_personality}' not in {resolved_gender} map, fallback → {voice_id}")
+
             voice_style = self.tts.get_voice_style(voice_id)
 
+            print(f"🎤 [SUPERTONIC] Voice resolved: personality='{resolved_personality}' + gender='{resolved_gender}' → voice_id='{voice_id}'")
             print(f"🔊 Generating speech ({voice_id}): '{clean_text[:50]}{'...' if len(clean_text) > 50 else ''}'")
 
+            resolved_lang = language or self.config.supertonic_language
             wav_array, duration = self.tts.synthesize(
                 clean_text,
                 voice_style=voice_style,
-                lang=self.config.supertonic_language
+                lang=resolved_lang
             )
 
             self.tts.save_audio(wav_array, output_file)
@@ -96,10 +128,16 @@ class SupertonicTTSClient:
             traceback.print_exc()
             return None
 
-    def synthesize_to_temp(self, text: str) -> Optional[str]:
+    def synthesize_to_temp(self, text: str,
+                           personality_id: Optional[str] = None,
+                           language: Optional[str] = None,
+                           gender: Optional[str] = None) -> Optional[str]:
         """Synthesize text to a temporary file"""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            return self.synthesize(text, temp_file.name)
+            return self.synthesize(text, temp_file.name,
+                                   personality_id=personality_id,
+                                   language=language,
+                                   gender=gender)
 
     def _clean_text_for_tts(self, text: str) -> str:
         """Clean text for better TTS pronunciation"""

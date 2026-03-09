@@ -51,7 +51,7 @@ class VoiceConfig:
     min_audio_length: float = 0.3  # 🔥 OTIMIZADO: Reduzido de 0.5s para aceitar comandos curtos
 
     # Supertonic TTS
-    tts_engine: str = "piper"  # "piper" or "supertonic"
+    tts_engine: str = "supertonic"  # "piper" or "supertonic"
     supertonic_enabled: bool = False
     supertonic_language: str = "pt"
     supertonic_personality: str = "neutral"

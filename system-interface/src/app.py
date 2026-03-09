@@ -303,6 +303,13 @@ if VOICE_ENABLED:
                 print(f"   ⚠️  Personality Manager falhou: {e}")
                 personality_manager = None
 
+            # Summary of TTS state
+            print("\n" + "-" * 50)
+            print(f"🎤 [TTS SUMMARY] tts_engine config = '{voice_config.tts_engine}'")
+            print(f"🎤 [TTS SUMMARY] supertonic_tts_client = {'INITIALIZED' if supertonic_tts_client else 'None (FALLBACK TO PIPER)'}")
+            print(f"🎤 [TTS SUMMARY] piper tts_client = {'INITIALIZED' if tts_client else 'None'}")
+            print("-" * 50)
+
             print("\n" + "=" * 70)
             print("✅ SISTEMA PRONTO PARA USO!")
             print("=" * 70)
@@ -941,12 +948,22 @@ Seja direto, objetivo e conciso."""
         # --- Resolve personality for TTS voice + Ollama model ---
         personality_id = _resolve_personality_for_user(user)
 
-        # Select TTS engine and set personality voice
+        # Per-request TTS parameters (no shared-state mutation)
+        _LANG_MAP = {"pt-BR": "pt", "en-US": "en", "es-ES": "es"}
+        _tts_personality = personality_id
+        _tts_language = _LANG_MAP.get(user["language"], "pt") if user else "pt"
+        _tts_gender = user["persona_gender"] if user else "male"
+
+        user_name = user["name"] if user else "anonymous"
+        print(f"🎤 [TTS-WIRE] User='{user_name}' | personality='{_tts_personality}' | gender='{_tts_gender}' | language='{_tts_language}'")
+
+        # Select TTS engine
         if voice_config.tts_engine == 'supertonic' and supertonic_tts_client:
-            supertonic_tts_client.config.supertonic_personality = personality_id
             tts = supertonic_tts_client
+            print(f"🎤 [TTS-WIRE] Engine: ✅ SUPERTONIC selected")
         else:
             tts = tts_client  # Piper fallback
+            print(f"🎤 [TTS-WIRE] Engine: ⚠️  PIPER fallback (config='{voice_config.tts_engine}', supertonic_client={'OK' if supertonic_tts_client else 'None'})")
 
         # Resolve Ollama model name (personality model if available)
         if personality_manager and not is_anonymous:
@@ -984,11 +1001,15 @@ Seja direto, objetivo e conciso."""
                             'index': sentence_index[0]
                         })
 
+                    def on_chunk_end(metadata):
+                        sse_manager.push_event(session_id, 'sentence_done', {})
+
                     def on_queue_complete():
                         print(f"🎵 [SSE] All audio played for session {session_id[:8]}...")
                         sse_manager.push_event(session_id, 'response_done', {})
 
                     audio_player.on_chunk_start = on_chunk_start
+                    audio_player.on_chunk_end = on_chunk_end
                     audio_player.on_queue_complete = on_queue_complete
                     audio_player.start_queue_playback()
 
@@ -996,9 +1017,52 @@ Seja direto, objetivo e conciso."""
                 sentence_detector = SentenceDetector(min_length=30)
                 full_response = ""
 
-                # Stream from Ollama (using personality model if resolved)
+                # TTS worker: synthesizes sentences in parallel with LLM streaming.
+                # The LLM loop feeds a queue; this thread drains it so TTS and LLM
+                # run concurrently instead of blocking each other.
+                import queue as _queue
+                tts_sentence_queue = _queue.Queue()
+
+                def tts_worker():
+                    while True:
+                        sentence = tts_sentence_queue.get()
+                        if sentence is None:  # sentinel — stop worker
+                            break
+                        try:
+                            print(f"🎙️ [SSE] Synthesizing: {sentence[:60]}...")
+                            audio_file = tts.synthesize_to_temp(
+                                sentence,
+                                personality_id=_tts_personality,
+                                language=_tts_language,
+                                gender=_tts_gender,
+                            )
+                            if audio_file and audio_player and audio_player.is_available():
+                                audio_player.enqueue_audio(audio_file, {
+                                    'text': sentence,
+                                    'cleanup': True
+                                })
+                        except Exception as e:
+                            print(f"❌ [SSE] TTS error: {e}")
+
+                tts_thread = threading.Thread(target=tts_worker, daemon=True, name="TTSWorker")
+                tts_thread.start()
+
+                # Append a per-message language reminder to reinforce the system prompt.
+                # Small models (gemma3:1b) mirror the user's input language and can
+                # override the system prompt instruction — placing the reminder in the
+                # user message itself keeps it in the immediate context where it has
+                # much stronger weight.
+                _LANGUAGE_REMINDERS = {
+                    'pt': '[Responda sempre em português brasileiro]',
+                    'en': '[Always respond in English, no matter what language I write in]',
+                    'es': '[Responde siempre en español, sin importar el idioma que use]',
+                }
+                _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
+                _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
+
+                # Stream from Ollama — no longer blocked by TTS synthesis
                 for chunk in ollama_client.generate_streaming_response(
-                    prompt=_user_message,
+                    prompt=_prompted_message,
                     system_prompt=_system_prompt,
                     conversation_context=_conversation_context,
                     model=_ollama_model
@@ -1011,27 +1075,19 @@ Seja direto, objetivo e conciso."""
                     # Push text chunk to browser
                     sse_manager.push_event(session_id, 'text_chunk', {'text': chunk})
 
-                    # Detect sentences and synthesize
+                    # Detect sentences and hand off to TTS worker
                     sentences = sentence_detector.add_chunk(chunk)
                     for sentence in sentences:
-                        print(f"🎙️ [SSE] Synthesizing: {sentence[:60]}...")
-                        audio_file = tts.synthesize_to_temp(sentence)
-                        if audio_file and audio_player and audio_player.is_available():
-                            audio_player.enqueue_audio(audio_file, {
-                                'text': sentence,
-                                'cleanup': True
-                            })
+                        tts_sentence_queue.put(sentence)
 
-                # Flush remaining text
+                # Flush remaining text into TTS worker
                 final_sentence = sentence_detector.flush()
                 if final_sentence:
-                    print(f"🎙️ [SSE] Final sentence: {final_sentence[:60]}...")
-                    audio_file = tts.synthesize_to_temp(final_sentence)
-                    if audio_file and audio_player and audio_player.is_available():
-                        audio_player.enqueue_audio(audio_file, {
-                            'text': final_sentence,
-                            'cleanup': True
-                        })
+                    tts_sentence_queue.put(final_sentence)
+
+                # Stop TTS worker and wait for all synthesis to finish
+                tts_sentence_queue.put(None)
+                tts_thread.join()
 
                 # Signal generation complete
                 if audio_player and audio_player.is_available():
@@ -1147,6 +1203,7 @@ Seja direto, objetivo e conciso."""
         if not is_anonymous and user_id:
             history_manager.add_message(user_id, 'assistant', response_text)
 
+        print(f"🎤 [TTS-WIRE/sync] ⚠️  Using PIPER (send_sync endpoint) — no personality/gender wiring!")
         audio_url = tts_client.synthesize(response_text)
 
         if not audio_url:
@@ -1581,6 +1638,20 @@ RESPONSE_STYLE_TO_PERSONALITY = {
 }
 
 
+def _localize_system_prompt(prompt: str, language_code: str) -> str:
+    """
+    Appends the appropriate language instruction to a personality prompt
+    based on the user's chosen language.
+    """
+    LANGUAGE_INSTRUCTIONS = {
+        'pt-BR': 'Sempre responda em português brasileiro, independentemente do idioma da pergunta.',
+        'en-US': 'Always respond in English, regardless of the language of the question.',
+        'es-ES': 'Siempre responde en español, independientemente del idioma de la pregunta.',
+    }
+    instruction = LANGUAGE_INSTRUCTIONS.get(language_code, LANGUAGE_INSTRUCTIONS['pt-BR'])
+    return prompt.rstrip() + ' ' + instruction
+
+
 def _build_system_prompt(user) -> str:
     """
     Constrói system prompt baseado nas preferências do usuário.
@@ -1598,7 +1669,8 @@ def _build_system_prompt(user) -> str:
     if personality_manager:
         personality = personality_manager.get_personality(personality_id)
         if personality and 'system_prompt' in personality:
-            return personality['system_prompt'].strip()
+            prompt = personality['system_prompt'].strip()
+            return _localize_system_prompt(prompt, user['language'])
 
     # Fallback: hardcoded prompts (same as before)
     style_instructions = {
