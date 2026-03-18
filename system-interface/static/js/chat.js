@@ -866,11 +866,6 @@ class ChatManager {
         console.log('🎙️  Wake word polling iniciado (ESP32)');
         
         this.wakeWordPollingInterval = setInterval(async () => {
-            // 🔥 OTIMIZAÇÃO: Pausar polling quando não há usuário logado (economiza recursos)
-            if (!this.currentUser) {
-                return; // Continua o interval mas não faz request
-            }
-            
             // Não verificar se estiver gravando voz
             if (this.isRecording || this.isProcessingVoice) {
                 return;
@@ -904,24 +899,15 @@ class ChatManager {
         this.lastWakeWordTime = now;
         
         console.log('🔔 Wake word detectado - iniciando ação');
-        
-        // IMPORTANTE: Se não houver usuário logado, avisar
-        if (!this.currentUser) {
-            console.warn('⚠️  Wake word detectado mas nenhum usuário logado (RFID)');
-            console.warn('   Aproxime um cartão RFID primeiro para usar o assistente');
-            // Ainda assim toca o som para feedback
-            this.playFeedbackSound('chat_open');
-            return;
-        }
-        
+
         // Tocar som de abertura do chat
         console.log('🔊 Tocando som chat_open...');
         this.playFeedbackSound('chat_open');
-        
-        // Abrir chat se fechado
+
+        // Abrir chat se fechado (funciona com ou sem RFID — sem RFID usa modo anônimo)
         if (!this.chatActive) {
             console.log('📖 Abrindo chat...');
-            this.openChat();
+            this.showChatInterface();
         } else {
             console.log('ℹ️  Chat já aberto');
         }
@@ -1551,7 +1537,8 @@ class ChatManager {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    duration: 3  // 3 segundos (reduzido de 5)
+                    max_duration: 15,
+                    language: this.currentUser?.language ?? ''
                 })
             });
             

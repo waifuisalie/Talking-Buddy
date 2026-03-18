@@ -451,6 +451,178 @@ class WhisperSTT:
         except Exception as e:
             print(f"❌ Error processing audio: {e}")
 
+    def record_utterance_to_file(self, output_path: str, max_duration: float = 15.0) -> bool:
+        """Record one utterance using VAD and save to a WAV file.
+
+        Opens its own independent PyAudio stream so it works even when the
+        background recording loop is not running (e.g. web API usage).
+
+        Returns True if speech was captured, False if silence/timeout/error.
+        """
+        if not pyaudio:
+            print("❌ PyAudio not available")
+            return False
+
+        audio = None
+        stream = None
+        try:
+            from contextlib import redirect_stderr
+            with open(os.devnull, 'w') as devnull:
+                with redirect_stderr(devnull):
+                    audio = pyaudio.PyAudio()
+
+            # Resolve device index the same way start() does
+            device_index = None
+            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                os.environ['AUDIODEV'] = self.config.capture_device_name
+                device_index = self._find_device_index_by_name_with_audio(
+                    audio, self.config.capture_device_name)
+            if device_index is None and self.config.capture_device >= 0:
+                device_index = self.config.capture_device
+
+            sample_rate = self.config.sample_rate
+            chunk_size = self.config.chunk_size
+
+            # Fall back to device's native rate if 16000 Hz isn't supported
+            if device_index is not None:
+                try:
+                    audio.is_format_supported(
+                        sample_rate,
+                        input_device=device_index,
+                        input_channels=1,
+                        input_format=pyaudio.paInt16
+                    )
+                except ValueError:
+                    native_rate = int(audio.get_device_info_by_index(device_index)['defaultSampleRate'])
+                    print(f"⚠️  [VAD] Device doesn't support {sample_rate} Hz, using native {native_rate} Hz")
+                    sample_rate = native_rate
+
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': 1,
+                'rate': sample_rate,
+                'input': True,
+                'frames_per_buffer': chunk_size,
+            }
+            if device_index is not None:
+                stream_kwargs['input_device_index'] = device_index
+
+            stream = audio.open(**stream_kwargs)
+
+            chunks_per_second = sample_rate / chunk_size
+            rms_window_size = max(3, int(0.2 * chunks_per_second))
+            rms_history = deque(maxlen=rms_window_size)
+
+            silence_threshold = self.silence_threshold
+            silence_duration_limit = self.silence_duration_limit
+
+            frames = []
+            recording = False
+            last_speech_time = None
+            start_time = time.time()
+
+            # Discard the first 700ms of audio to let any feedback sounds (e.g.
+            # chat_open beep) decay before VAD starts listening.
+            discard_chunks = int(0.7 * sample_rate / chunk_size)
+            for _ in range(discard_chunks):
+                stream.read(chunk_size, exception_on_overflow=False)
+
+            print("👂 [VAD] Waiting for speech...")
+
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed >= max_duration:
+                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached")
+                    break
+
+                audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+                try:
+                    rms_squared = np.mean(audio_array.astype(np.float64) ** 2)
+                    rms_instant = 0.0 if (np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0) else np.sqrt(rms_squared)
+                except (ValueError, RuntimeWarning):
+                    rms_instant = 0.0
+
+                rms_history.append(rms_instant)
+                rms = sum(rms_history) / len(rms_history)
+
+                if rms > silence_threshold:
+                    if not recording:
+                        print("🗣️  [VAD] Speech detected, recording...")
+                        recording = True
+                    frames.append(audio_data)
+                    last_speech_time = time.time()
+                elif recording:
+                    frames.append(audio_data)
+                    silence_elapsed = time.time() - last_speech_time
+                    if silence_elapsed >= silence_duration_limit:
+                        print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
+                        break
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+            audio.terminate()
+            audio = None
+
+            if not frames:
+                print("⚠️  [VAD] No speech detected")
+                return False
+
+            # Check minimum audio length
+            duration = len(frames) * chunk_size / sample_rate
+            if duration < self.min_audio_length:
+                print(f"⚠️  [VAD] Audio too short ({duration:.2f}s)")
+                return False
+
+            # Save to WAV (paInt16 = 2 bytes per sample)
+            # whisper.cpp handles resampling internally if rate != 16000
+            with wave.open(output_path, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(b''.join(frames))
+
+            print(f"💾 [VAD] Saved {duration:.1f}s of audio to {output_path}")
+            return True
+
+        except Exception as e:
+            print(f"❌ [VAD] Error during recording: {e}")
+            return False
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+
+    def _find_device_index_by_name_with_audio(self, audio, device_name: str) -> Optional[int]:
+        """Same as _find_device_index_by_name but uses a provided PyAudio instance."""
+        try:
+            import re
+            device_name_lower = device_name.lower()
+            for i in range(audio.get_device_count()):
+                info = audio.get_device_info_by_index(i)
+                if info['maxInputChannels'] > 0:
+                    info_name_lower = info['name'].lower()
+                    if device_name_lower in info_name_lower:
+                        return i
+                    if 'usb' in device_name_lower and 'usb' in info_name_lower:
+                        return i
+                    card_match = re.search(r'CARD=([^,]+)', device_name)
+                    if card_match and card_match.group(1).lower() in info_name_lower:
+                        return i
+            return None
+        except Exception:
+            return None
+
     def _transcribe_audio_file(self, audio_path: str) -> Optional[str]:
         """Transcribe audio file using whisper CLI"""
         try:

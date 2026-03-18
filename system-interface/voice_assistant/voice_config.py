@@ -42,7 +42,7 @@ class VoiceConfig:
     whisper_model: str = "ggml-base.bin"
     whisper_model_path: str = os.path.expanduser("~/whisper.cpp/models")
     whisper_binary: str = os.path.expanduser("~/whisper.cpp/build/bin/main")
-    whisper_language: str = "pt"  # Português
+    whisper_language: str = "auto"  # Auto-detect; overridden per-request by user's language
     whisper_threads: int = 4
     
     # VAD (Voice Activity Detection)

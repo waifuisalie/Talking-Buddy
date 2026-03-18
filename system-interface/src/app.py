@@ -1417,122 +1417,38 @@ def api_voice_record_and_transcribe():
             }), 503
         
         data = request.get_json() or {}
-        duration = data.get('duration', 3)  # Reduzido para 3 segundos
-        
-        # Importa temporariamente os módulos necessários
+        max_duration = data.get('max_duration', 15)
+
+        # Map DB language codes to whisper language codes; fall back to auto-detect
+        _WHISPER_LANG_MAP = {'pt-BR': 'pt', 'en-US': 'en', 'es-ES': 'es'}
+        raw_lang = data.get('language', '')
+        whisper_lang = _WHISPER_LANG_MAP.get(raw_lang, 'auto')
+        whisper_stt.config.language = whisper_lang
+        print(f"🌐 [API] Whisper language: {whisper_lang} (from '{raw_lang}')")
+
         import tempfile
-        import subprocess
-        import wave
-        
-        # Grava áudio com detecção de silêncio (para automaticamente quando detectar silêncio)
-        print(f"🎤 [API] Gravando áudio do microfone (máx {duration}s)...")
         temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False, dir='/tmp')
         temp_path = temp_file.name
         temp_file.close()
-        
-        # Usa arecord com --max-file-time para gravar até o tempo máximo
-        # Sox será usado depois para detectar silêncio e cortar
-        cmd = [
-            'arecord',
-            '-D', voice_config.microphone_device,
-            '-f', 'S16_LE',
-            '-r', '16000',
-            '-c', '1',
-            '-d', str(duration),
-            temp_path
-        ]
-        
-        print(f"🎤 [API] Comando: {' '.join(cmd)}")
-        
-        # IMPORTANTE: wait=True para garantir que o processo termine antes de continuar
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 5)
-        
-        if result.returncode != 0:
-            print(f"❌ [API] Erro ao gravar: {result.stderr}")
+
+        print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
+        speech_captured = whisper_stt.record_utterance_to_file(temp_path, max_duration=max_duration)
+
+        if not speech_captured:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
             return jsonify({
                 'success': False,
-                'error': f'Erro ao gravar áudio: {result.stderr}'
-            }), 500
-        
-        # Verifica se o arquivo foi criado
-        if not os.path.exists(temp_path):
-            print(f"❌ [API] Arquivo não foi criado: {temp_path}")
-            return jsonify({
-                'success': False,
-                'error': 'Arquivo de áudio não foi gravado'
-            }), 500
-        
-        print(f"✅ [API] Áudio gravado: {temp_path} ({os.path.getsize(temp_path)} bytes)")
-        
-        # Detecta se há conteúdo de áudio usando Mean VAD (rolling RMS smoothing)
-        # Ported from rpi5-chatbot/src/whisper_stt.py — filters transient noise spikes
-        try:
-            import numpy as np
-            from collections import deque
+                'error': 'Nenhum som detectado. Fale mais alto.'
+            }), 400
 
-            with wave.open(temp_path, 'rb') as wf:
-                sample_rate = wf.getframerate()
-                n_frames = wf.getnframes()
-                frames = wf.readframes(n_frames)
-
-            audio_array = np.frombuffer(frames, dtype=np.int16).astype(np.float64)
-
-            if len(audio_array) == 0:
-                os.remove(temp_path)
-                return jsonify({
-                    'success': False,
-                    'error': 'Nenhum som detectado. Fale mais alto.'
-                }), 400
-
-            # Rolling RMS with ~0.2s window (same as rpi5-chatbot Mean VAD)
-            chunk_size = 1024
-            chunks_per_second = sample_rate / chunk_size
-            rms_window_size = max(3, int(0.2 * chunks_per_second))
-            rms_history = deque(maxlen=rms_window_size)
-
-            silence_threshold = voice_config.silence_threshold if voice_config else 30
-            speech_chunks = 0
-            total_chunks = 0
-
-            for i in range(0, len(audio_array), chunk_size):
-                chunk = audio_array[i:i + chunk_size]
-                if len(chunk) == 0:
-                    break
-
-                # Instant RMS
-                rms_squared = np.mean(chunk ** 2)
-                if np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0:
-                    rms_instant = 0.0
-                else:
-                    rms_instant = np.sqrt(rms_squared)
-
-                # Smoothed RMS (rolling average)
-                rms_history.append(rms_instant)
-                rms_smoothed = sum(rms_history) / len(rms_history)
-
-                total_chunks += 1
-                if rms_smoothed > silence_threshold:
-                    speech_chunks += 1
-
-            speech_ratio = speech_chunks / total_chunks if total_chunks > 0 else 0
-            print(f"🔊 [API] Mean VAD: {speech_chunks}/{total_chunks} chunks acima do threshold ({speech_ratio:.1%})")
-
-            if speech_ratio < 0.05:  # Less than 5% speech = silence
-                print(f"⚠️  [API] Áudio muito baixo (speech ratio: {speech_ratio:.1%})")
-                os.remove(temp_path)
-                return jsonify({
-                    'success': False,
-                    'error': 'Nenhum som detectado. Fale mais alto.'
-                }), 400
-
-        except Exception as e:
-            print(f"⚠️  [API] Erro ao verificar áudio: {e}")
-        
         # Transcreve com Whisper
         print(f"🔄 [API] Transcrevendo com Whisper...")
         print(f"📁 [API] Modelo: {voice_config.whisper_model_path}/{voice_config.whisper_model}")
         print(f"🔧 [API] Binário: {voice_config.whisper_binary}")
-        
+
         text = whisper_stt._transcribe_audio_file(temp_path)
         
         # Remove arquivo temporário
@@ -1541,18 +1457,20 @@ def api_voice_record_and_transcribe():
         except:
             pass
         
-        if text:
-            print(f"✅ [API] Transcrito: '{text}'")
+        import re
+        cleaned = re.sub(r'\[.*?\]', '', text or '').strip()
+        if cleaned:
+            print(f"✅ [API] Transcrito: '{cleaned}'")
             return jsonify({
                 'success': True,
-                'text': text
+                'text': cleaned
             })
         else:
-            print(f"❌ [API] Transcrição vazia ou falhou")
+            print(f"⚠️  [API] Nenhuma fala detectada (raw: '{text}')")
             return jsonify({
                 'success': False,
-                'error': 'Não foi possível transcrever o áudio'
-            }), 500
+                'error': 'Não consegui entender. Tente novamente.'
+            }), 400
             
     except Exception as e:
         import traceback
