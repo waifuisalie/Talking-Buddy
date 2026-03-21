@@ -244,12 +244,18 @@ def main():
     )
 
     # Operation arguments
+    parser.add_argument("--timing", action="store_true",
+                        help="Enable timing debug: mostra quanto tempo cada etapa do pipeline leva (STT, LLM, TTS)")
     parser.add_argument("--test", action="store_true", help="Run system tests")
     parser.add_argument("--clear-history", action="store_true", help="Clear conversation history")
     parser.add_argument("--export", type=str, help="Export conversation to file")
     parser.add_argument("--say", type=str, help="Make the assistant say something (test TTS)")
 
     args = parser.parse_args()
+
+    if args.timing:
+        config.set_timing_debug(True)
+        print("⏱️  Timing debug ativado")
 
     # Handle special listing commands first
     if args.list_devices:

@@ -368,6 +368,7 @@ class WhisperSTT:
                     else:
                         # Long enough silence — hand off to worker immediately
                         print(f"🤐 Silence detected ({silence_duration:.1f}s), processing...")
+                        config.tlog("[STT] fim de fala detectado pelo VAD")
                         frames = self.audio_frames
                         self.audio_frames = []      # reset buffer immediately
                         self.is_recording = False   # reset VAD state immediately
@@ -437,7 +438,9 @@ class WhisperSTT:
             print(f"💾 Audio saved ({duration:.1f}s), transcribing...")
 
             # Run whisper CLI (blocking, but we're in the worker thread)
+            t_stt = config.tlog("[STT] whisper-cli iniciado")
             transcription = self._transcribe_audio_file(temp_path)
+            config.tlog("[STT] transcrição concluída", t_stt)
 
             # Cleanup temp file
             Path(temp_path).unlink(missing_ok=True)
@@ -520,6 +523,8 @@ class WhisperSTT:
             recording = False
             last_speech_time = None
             start_time = time.time()
+            last_rms_print = 0.0
+            rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
             # Discard the first 700ms of audio to let any feedback sounds (e.g.
             # chat_open beep) decay before VAD starts listening.
@@ -528,6 +533,8 @@ class WhisperSTT:
                 stream.read(chunk_size, exception_on_overflow=False)
 
             print("👂 [VAD] Waiting for speech...")
+            if self.debug_mode:
+                print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
 
             while True:
                 elapsed = time.time() - start_time
@@ -546,6 +553,14 @@ class WhisperSTT:
 
                 rms_history.append(rms_instant)
                 rms = sum(rms_history) / len(rms_history)
+
+                # Periodic RMS debug output
+                if self.debug_mode:
+                    now = time.time()
+                    if now - last_rms_print >= rms_print_interval:
+                        state = "🗣️  FALA " if rms > silence_threshold else "🤫 silêncio"
+                        print(f"🔊 [VAD] RMS: {rms:6.1f} (raw {rms_instant:5.0f}) | threshold: {silence_threshold} | {state}")
+                        last_rms_print = now
 
                 if rms > silence_threshold:
                     if not recording:

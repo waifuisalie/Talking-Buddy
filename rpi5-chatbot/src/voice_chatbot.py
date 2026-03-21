@@ -604,6 +604,7 @@ class VoiceChatbot:
         """Handle user input with streaming LLM and incremental TTS"""
         try:
             self.is_processing = True
+            t_pipeline = config.tlog("[PIPELINE] transcrição recebida, iniciando resposta")
             self.state_manager.set_state("processing")
 
             # Add user message to history
@@ -624,6 +625,7 @@ class VoiceChatbot:
                 nonlocal first_audio_played
                 if not first_audio_played:
                     first_audio_played = True
+                    config.tlog("[PIPELINE] primeiro áudio tocando", t_pipeline)
                     self.state_manager.set_state("speaking")
                     if self.whisper_stt:
                         self.whisper_stt.pause_recording()

@@ -12,6 +12,7 @@ import os
 import time
 import subprocess
 import sys
+import signal
 import secrets
 import threading
 import fcntl  # 🔥 OTIMIZAÇÃO: File locking para RFID
@@ -184,6 +185,36 @@ import atexit
 atexit.register(cleanup_rfid_process)
 atexit.register(cleanup_wake_word_manager)
 
+
+def shutdown_gracefully(signum=None, frame=None):
+    """Encerra o sistema de forma limpa ao receber SIGINT ou SIGTERM"""
+    print("\n\n🛑 Encerrando TalkingBuddy...", flush=True)
+
+    cleanup_rfid_process()
+    cleanup_wake_word_manager()
+
+    if audio_player:
+        try:
+            audio_player.stop()
+            print("✅ AudioPlayer encerrado", flush=True)
+        except Exception:
+            pass
+
+    if whisper_stt:
+        try:
+            whisper_stt.stop()
+            print("✅ Whisper STT encerrado", flush=True)
+        except Exception:
+            pass
+
+    print("👋 Sistema encerrado.", flush=True)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, shutdown_gracefully)
+signal.signal(signal.SIGTERM, shutdown_gracefully)
+
+
 # 🔥 KILLALL de processos RFID ao iniciar servidor (previne processos órfãos)
 print("\n" + "="*60)
 print("🚀 INICIANDO SERVIDOR - Limpando processos RFID órfãos...")
@@ -223,10 +254,13 @@ if VOICE_ENABLED:
             ollama_client = OllamaClient(voice_config)
             tts_client = TTSClient(voice_config)
             
-            # Inicializa Audio Player APENAS no processo reloader (evita device busy)
+            # Inicializa Audio Player no processo correto:
+            # - com reloader ativo: apenas no processo filho (WERKZEUG_RUN_MAIN=true)
+            # - sem reloader (use_reloader=False): sempre inicializa
             import os
-            if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-                # Processo reloader - OK para inicializar pygame
+            _is_main_process = (os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or
+                                 os.environ.get('WERKZEUG_RUN_MAIN') is None)
+            if _is_main_process:
                 audio_player = HardwareAudioPlayer(voice_config)
             else:
                 print("ℹ️ [AudioPlayer] Aguardando processo reloader...")
@@ -248,7 +282,7 @@ if VOICE_ENABLED:
                     whisper_config.silence_threshold = voice_config.silence_threshold
                     whisper_config.silence_duration = voice_config.silence_duration
                     whisper_config.min_audio_length = voice_config.min_audio_length
-                    whisper_config.debug_mode = False  # Desabilita debug em produção
+                    whisper_config.debug_mode = os.getenv("VAD_DEBUG", "0") == "1"
                     
                     # Cria instância do Whisper STT (sem callbacks ainda)
                     whisper_stt = WhisperSTT(whisper_config, callback=None)
@@ -326,7 +360,9 @@ if VOICE_ENABLED:
 
 # ========== WAKE WORD INITIALIZATION (ESP32) ==========
 
-if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+_is_main_process = (os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or
+                     os.environ.get('WERKZEUG_RUN_MAIN') is None)
+if _is_main_process:
     if WAKE_WORD_ENABLED and ESP32_AVAILABLE:
         try:
             print("\n" + "=" * 70)
@@ -372,6 +408,7 @@ if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
 
 else:
     print("\nℹ️  Wake Word aguardando processo reloader...")
+    wake_word_manager = None
 
 
 # Verifica se tem admin (usando conexão temporária)
@@ -1651,6 +1688,7 @@ if __name__ == '__main__':
     # host='127.0.0.1' = apenas localhost (máxima segurança)
     app.run(
         debug=True,
+        use_reloader=False,  # Desativa reloader para que SIGINT chegue ao processo correto
         host='127.0.0.1',  # Apenas localhost (offline)
         port=5000,
         threaded=True

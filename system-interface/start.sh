@@ -222,7 +222,12 @@ echo -e "${BLUE}================================================================
 echo ""
 
 # Iniciar Flask
-python3 src/app.py
+# O trap garante que Ctrl+C no shell encerra o processo Python de forma limpa
+trap 'echo -e "\n${YELLOW}⚠️  Interrompido pelo usuário${NC}"; kill $FLASK_PID 2>/dev/null; wait $FLASK_PID 2>/dev/null; exit 0' SIGINT SIGTERM
+
+python3 src/app.py &
+FLASK_PID=$!
+wait $FLASK_PID
 
 
 
