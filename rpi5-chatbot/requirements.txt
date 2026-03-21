@@ -7,3 +7,4 @@ psutil>=5.9.0
 gpiozero>=2.0.0
 RPi.GPIO>=0.7.1
 PyYAML>=6.0.0
+faster-whisper>=1.0.0

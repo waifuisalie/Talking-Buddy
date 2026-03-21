@@ -41,6 +41,7 @@ class WhisperConfig:
     # Model and binary paths - Uses home directory for portability
     model_path: str = os.path.expanduser("~/whisper.cpp/models/ggml-base.bin")  # Multilingual (PT-BR support)
     cli_binary: str = os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli")  # CLI binary (not whisper-stream!)
+    faster_whisper_model: str = "base"  # faster-whisper model name or local CTranslate2 path
 
     # Language and processing
     language: str = "pt"  # Portuguese (change to "en" for English)

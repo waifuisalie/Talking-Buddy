@@ -668,9 +668,46 @@ else
     fi
 fi
 
+# Install faster-whisper and download model into local cache
+echo "🔄 Checking faster-whisper STT..."
+
+FW_CACHE_DIR="$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-base"
+if python -c "from faster_whisper import WhisperModel" 2>/dev/null && [ -d "$FW_CACHE_DIR" ]; then
+    echo "⏭️  faster-whisper already installed (with model)"
+else
+    echo "🔄 Installing faster-whisper..."
+
+    if pip install faster-whisper; then
+        echo "✅ Python package installed"
+
+        # Trigger one-time model download to ~/.cache/huggingface/
+        echo "🔄 Downloading faster-whisper base model (~150MB from HuggingFace)..."
+        echo "   This is a one-time download. Subsequent runs load from disk."
+
+        if python -c "
+from faster_whisper import WhisperModel
+print('Loading model...')
+WhisperModel('base', device='cpu', compute_type='int8')
+print('Model cached successfully')
+" 2>&1; then
+            echo "✅ faster-whisper model cached successfully"
+        else
+            echo "⚠️  faster-whisper model download failed (non-fatal)"
+            echo "   Will retry on first application run"
+            echo ""
+            echo "   Troubleshooting:"
+            echo "   - Check internet: ping huggingface.co"
+            echo "   - Try manual: python -c \"from faster_whisper import WhisperModel; WhisperModel('base', device='cpu')\""
+        fi
+    else
+        echo "⚠️  faster-whisper installation failed (non-fatal)"
+        echo "   STT will not be available. Try: pip install faster-whisper"
+    fi
+fi
+
 # Verify critical packages installed
 echo "✅ Verifying critical packages..."
-CRITICAL_PACKAGES=("pygame" "requests" "numpy" "pyaudio" "serial" "psutil")
+CRITICAL_PACKAGES=("pygame" "requests" "numpy" "pyaudio" "serial" "psutil" "faster_whisper")
 MISSING_PACKAGES=()
 
 for pkg in "${CRITICAL_PACKAGES[@]}"; do
