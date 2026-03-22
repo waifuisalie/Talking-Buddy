@@ -36,6 +36,26 @@ except ImportError:
     print("⚠️  PyAudio not installed. Run: pip install pyaudio")
     pyaudio = None
 
+from contextlib import contextmanager
+
+@contextmanager
+def _suppress_audio_init_noise():
+    """Redirect fd 2 to /dev/null during PyAudio() init.
+
+    redirect_stderr() only moves Python's sys.stderr; ALSA and Jack write
+    directly to the underlying OS file-descriptor 2, so they slip through.
+    Replacing fd 2 at the OS level silences both.
+    """
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fd = os.dup(2)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+    try:
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
+
 import config
 
 
@@ -131,11 +151,8 @@ class WhisperSTT:
             return False
 
         try:
-            # Suppress ALSA warnings (cosmetic only, doesn't affect functionality)
-            from contextlib import redirect_stderr
-            with open(os.devnull, 'w') as devnull:
-                with redirect_stderr(devnull):
-                    self.audio = pyaudio.PyAudio()
+            with _suppress_audio_init_noise():
+                self.audio = pyaudio.PyAudio()
 
             # Auto-detect input device if enabled
             device_index = None
@@ -480,10 +497,8 @@ class WhisperSTT:
         audio = None
         stream = None
         try:
-            from contextlib import redirect_stderr
-            with open(os.devnull, 'w') as devnull:
-                with redirect_stderr(devnull):
-                    audio = pyaudio.PyAudio()
+            with _suppress_audio_init_noise():
+                audio = pyaudio.PyAudio()
 
             # Resolve device index the same way start() does
             device_index = None
@@ -679,8 +694,8 @@ class WhisperSTT:
             segments, _info = self._fw_model.transcribe(
                 audio_path,
                 language=lang,
-                beam_size=5,
-                vad_filter=True,  # built-in VAD removes leading/trailing silence
+                beam_size=1,
+                condition_on_previous_text=False,
             )
 
             text = " ".join(segment.text for segment in segments).strip()

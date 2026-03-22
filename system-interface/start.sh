@@ -24,7 +24,7 @@ cd "$SCRIPT_DIR"
 # ============================================================================
 # 1. VERIFICAÇÕES PRÉ-INICIALIZAÇÃO
 # ============================================================================
-echo -e "${YELLOW}[1/6]${NC} Verificando pré-requisitos..."
+echo -e "${YELLOW}[1/8]${NC} Verificando pré-requisitos..."
 
 # Verificar Python3
 if ! command -v python3 &> /dev/null; then
@@ -46,7 +46,7 @@ echo -e "${GREEN}✓${NC} Ollama instalado"
 # 2. INICIAR OLLAMA SERVICE
 # ============================================================================
 echo ""
-echo -e "${YELLOW}[2/6]${NC} Verificando serviço Ollama..."
+echo -e "${YELLOW}[2/8]${NC} Verificando serviço Ollama..."
 
 if ! systemctl is-active --quiet ollama 2>/dev/null; then
     echo "🔄 Iniciando serviço Ollama..."
@@ -87,11 +87,34 @@ else
     echo -e "${GREEN}✓${NC} Modelo Ollama disponível (sem personalidades - usando modelo base)"
 fi
 
+# Aquecimento do Ollama: envia uma mensagem curta para carregar o modelo na RAM
+# e aquecer o KV-cache. Sem isso, o primeiro pedido do usuário demora ~7-9s
+# para o primeiro token; após este aquecimento, cai para ~3-5s.
+OLLAMA_WARMUP_MODEL="${OLLAMA_MODEL:-gemma3:1b}"
+echo "🔄 Aquecendo Ollama (carregando modelo $OLLAMA_WARMUP_MODEL na RAM)..."
+WARMUP_START=$SECONDS
+WARMUP_RESPONSE=$(curl -s --max-time 60 http://127.0.0.1:11434/api/chat \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"model\": \"$OLLAMA_WARMUP_MODEL\",
+        \"messages\": [{\"role\": \"user\", \"content\": \"Olá\"}],
+        \"stream\": false,
+        \"options\": {\"num_predict\": 1}
+    }" 2>/dev/null)
+WARMUP_SECS=$(( SECONDS - WARMUP_START ))
+
+if echo "$WARMUP_RESPONSE" | grep -q '"message"'; then
+    echo -e "${GREEN}✓${NC} Ollama aquecido em ${WARMUP_SECS}s — modelo $OLLAMA_WARMUP_MODEL na RAM"
+else
+    echo -e "${YELLOW}⚠️  Aquecimento do Ollama falhou (${WARMUP_SECS}s) — primeiro request pode ser lento${NC}"
+    echo -e "   Resposta: $(echo "$WARMUP_RESPONSE" | head -c 120)"
+fi
+
 # ============================================================================
 # 3. VERIFICAR AMBIENTE PYTHON
 # ============================================================================
 echo ""
-echo -e "${YELLOW}[3/6]${NC} Verificando ambiente Python..."
+echo -e "${YELLOW}[3/8]${NC} Verificando ambiente Python..."
 
 # Verificar virtual environment
 if [ ! -d "venv" ]; then
@@ -138,7 +161,7 @@ fi
 # 4. VERIFICAR CONFIGURAÇÃO
 # ============================================================================
 echo ""
-echo -e "${YELLOW}[4/6]${NC} Verificando configuração..."
+echo -e "${YELLOW}[4/8]${NC} Verificando configuração..."
 
 # Verificar .env
 if [ ! -f ".env" ]; then
@@ -170,7 +193,7 @@ echo -e "${GREEN}✓${NC} Diretórios criados"
 # 5. INICIALIZAR BANCO DE DADOS
 # ============================================================================
 echo ""
-echo -e "${YELLOW}[5/6]${NC} Verificando banco de dados..."
+echo -e "${YELLOW}[5/8]${NC} Verificando banco de dados..."
 
 if [ ! -f "data/users.db" ]; then
     echo "🔄 Inicializando banco de dados..."
@@ -185,10 +208,158 @@ else
 fi
 
 # ============================================================================
-# 6. INICIAR SERVIDOR FLASK
+# 6. PRÉ-CARREGAR MODELOS (aquecimento de caches)
 # ============================================================================
 echo ""
-echo -e "${YELLOW}[6/6]${NC} Iniciando servidor Flask..."
+echo -e "${YELLOW}[6/8]${NC} Aquecendo modelos de IA..."
+
+# Aquecimento do faster-whisper: carrega o modelo e roda uma inferência real
+# para preencher CPU caches (L2/L3), buffers CTranslate2 e rotinas BLAS.
+# Sem isso, a primeira transcrição do usuário demora ~17s em vez de ~5s.
+if python3 -c "import faster_whisper" 2>/dev/null; then
+    echo "🔄 Aquecendo faster-whisper (primeira inferência)..."
+
+    # Tentar gerar áudio de voz real com espeak (força o modelo a processar fala verdadeira,
+    # não apenas silêncio que seria filtrado pelo VAD e não aqueceria os caches do modelo).
+    WARMUP_WAV=$(mktemp /tmp/warmup_XXXXXX.wav)
+    USED_SPEECH=false
+    if command -v espeak &>/dev/null; then
+        espeak -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
+               --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
+        [ "$USED_SPEECH" = true ] && echo "   Áudio de aquecimento gerado com espeak" \
+                                  || echo "   espeak encontrado mas falhou, usando silêncio"
+    fi
+    if [ "$USED_SPEECH" = false ] && command -v espeak-ng &>/dev/null; then
+        espeak-ng -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
+                  --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
+        [ "$USED_SPEECH" = true ] && echo "   Áudio de aquecimento gerado com espeak-ng" \
+                                  || echo "   espeak-ng encontrado mas falhou, usando silêncio"
+    fi
+    [ "$USED_SPEECH" = false ] && echo "   espeak não disponível — usando áudio silencioso como fallback"
+
+    WARMUP_START=$SECONDS
+    WARMUP_RESULT=$(python3 - "$WARMUP_WAV" "$USED_SPEECH" <<'PYEOF'
+import wave, struct, os, sys, time
+
+warmup_wav = sys.argv[1]
+used_speech = sys.argv[2] == 'true'
+
+# Se espeak não gerou áudio real, criar WAV silencioso como fallback.
+# Usar vad_filter=False para garantir que o modelo execute mesmo sem voz.
+if not used_speech or os.path.getsize(warmup_wav) < 1000:
+    sample_rate, duration = 16000, 2
+    num_samples = sample_rate * duration
+    with wave.open(warmup_wav, 'w') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(struct.pack('<' + 'h' * num_samples, *([0] * num_samples)))
+    used_speech = False
+
+try:
+    from faster_whisper import WhisperModel
+    model_name = os.environ.get('FASTER_WHISPER_MODEL', 'base')
+    src = 'voz espeak' if used_speech else 'silêncio (espeak indisponível)'
+    t0 = time.time()
+    model = WhisperModel(model_name, device='cpu', compute_type='int8')
+    t_load = time.time() - t0
+    t1 = time.time()
+    # vad_filter=True funciona com áudio real; False garante execução com silêncio.
+    segs, info = model.transcribe(warmup_wav, language='pt', beam_size=1, condition_on_previous_text=False,
+                                   vad_filter=used_speech)
+    text = ' '.join(s.text for s in segs).strip()
+    t_infer = time.time() - t1
+    result = f'OK|{src}|{t_load:.1f}s load|{t_infer:.1f}s infer'
+    if text:
+        result += f'|transcrito: "{text[:60]}"'
+    print(result)
+except Exception as e:
+    print(f'FAIL|{e}')
+finally:
+    if os.path.exists(warmup_wav):
+        os.unlink(warmup_wav)
+PYEOF
+    )
+    WARMUP_SECS=$(( SECONDS - WARMUP_START ))
+
+    if echo "$WARMUP_RESULT" | grep -q "^OK|"; then
+        SRC=$(echo "$WARMUP_RESULT" | cut -d'|' -f2)
+        TLOAD=$(echo "$WARMUP_RESULT" | cut -d'|' -f3)
+        TINFER=$(echo "$WARMUP_RESULT" | cut -d'|' -f4)
+        TTEXT=$(echo "$WARMUP_RESULT" | cut -d'|' -f5)
+        echo -e "${GREEN}✓${NC} faster-whisper aquecido em ${WARMUP_SECS}s"
+        echo -e "   Fonte: ${SRC} | ${TLOAD} | ${TINFER}"
+        [ -n "$TTEXT" ] && echo -e "   ${TTEXT}"
+    else
+        ERR=$(echo "$WARMUP_RESULT" | cut -d'|' -f2-)
+        echo -e "${RED}❌ Falha no aquecimento do faster-whisper: ${ERR}${NC}"
+        echo -e "${YELLOW}   (primeira transcrição do usuário pode ser mais lenta)${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  faster-whisper não instalado, pulando aquecimento${NC}"
+fi
+
+# ============================================================================
+# 7. PRÉ-CARREGAR SUPERTONIC TTS
+# ============================================================================
+echo ""
+echo -e "${YELLOW}[7/8]${NC} Aquecendo Supertonic TTS..."
+
+if python3 -c "import supertonic" 2>/dev/null; then
+    WARMUP_START=$SECONDS
+    WARMUP_RESULT=$(python3 - <<'PYEOF'
+import sys, os, time, tempfile
+
+try:
+    from supertonic import TTS
+    t0 = time.time()
+    tts = TTS()
+    t_load = time.time() - t0
+
+    phrase = "Olá! Estou pronto para conversar com você."
+
+    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+        out_path = f.name
+
+    t1 = time.time()
+    wav_array, duration = tts.synthesize(phrase, voice_style=tts.get_voice_style("M2"), lang="pt")
+    tts.save_audio(wav_array, out_path)
+    t_synth = time.time() - t1
+
+    try:
+        os.unlink(out_path)
+    except Exception:
+        pass
+
+    dur_s = float(duration[0]) if duration else 0.0
+    print(f"OK|{t_load:.1f}s load|{t_synth:.1f}s synth|{dur_s:.2f}s audio")
+
+except Exception as e:
+    print(f"FAIL|{e}")
+PYEOF
+    )
+    WARMUP_SECS=$(( SECONDS - WARMUP_START ))
+
+    if echo "$WARMUP_RESULT" | grep -q "^OK|"; then
+        TLOAD=$(echo "$WARMUP_RESULT" | cut -d'|' -f2)
+        TSYNTH=$(echo "$WARMUP_RESULT" | cut -d'|' -f3)
+        TAUDIO=$(echo "$WARMUP_RESULT" | cut -d'|' -f4)
+        echo -e "${GREEN}✓${NC} Supertonic TTS aquecido em ${WARMUP_SECS}s"
+        echo -e "   ${TLOAD} | ${TSYNTH} | ${TAUDIO} gerado"
+    else
+        ERR=$(echo "$WARMUP_RESULT" | cut -d'|' -f2-)
+        echo -e "${RED}❌ Falha no aquecimento do Supertonic: ${ERR}${NC}"
+        echo -e "${YELLOW}   (primeira síntese do usuário pode ser mais lenta)${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  Supertonic não instalado, pulando aquecimento${NC}"
+fi
+
+# ============================================================================
+# 8. INICIAR SERVIDOR FLASK
+# ============================================================================
+echo ""
+echo -e "${YELLOW}[8/8]${NC} Iniciando servidor Flask..."
 echo ""
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "${GREEN}✓ Sistema pronto!${NC}"

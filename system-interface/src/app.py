@@ -54,12 +54,26 @@ except ImportError as e:
     print(f"⚠️  ESP32Manager não disponível: {e}")
 
 WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
+DEBUG_LOGS = os.getenv('DEBUG_LOGS', 'false').lower() == 'true'
 
 # Inicialização do Flask
-app = Flask(__name__, 
+app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates'),
             static_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static'))
 app.secret_key = secrets.token_hex(32)
+
+# Suppress noisy polling routes from Werkzeug access log unless DEBUG_LOGS=true
+if not DEBUG_LOGS:
+    import logging
+
+    _POLL_PATHS = ('/api/wake_word_status', '/usuarios/rfid/poll')
+
+    class _SuppressPollLogs(logging.Filter):
+        def filter(self, record):
+            msg = record.getMessage()
+            return not any(p in msg for p in _POLL_PATHS)
+
+    logging.getLogger('werkzeug').addFilter(_SuppressPollLogs())
 
 # Configuração do banco de dados (na raiz do projeto)
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assistant.db')
@@ -1058,7 +1072,7 @@ Seja direto, objetivo e conciso."""
                     audio_player.start_queue_playback()
 
                 # Sentence detector for chunked TTS
-                sentence_detector = SentenceDetector(min_length=30)
+                sentence_detector = SentenceDetector(min_length=20, max_length=80)
                 full_response = ""
 
                 # TTS worker: synthesizes sentences in parallel with LLM streaming.
@@ -1463,10 +1477,10 @@ def api_voice_record_and_transcribe():
         data = request.get_json() or {}
         max_duration = data.get('max_duration', 15)
 
-        # Map DB language codes to whisper language codes; fall back to auto-detect
+        # Map DB language codes to whisper language codes; fall back to 'pt' (default for anonymous users)
         _WHISPER_LANG_MAP = {'pt-BR': 'pt', 'en-US': 'en', 'es-ES': 'es'}
         raw_lang = data.get('language', '')
-        whisper_lang = _WHISPER_LANG_MAP.get(raw_lang, 'auto')
+        whisper_lang = _WHISPER_LANG_MAP.get(raw_lang, 'pt')
         whisper_stt.config.language = whisper_lang
         print(f"🌐 [API] Whisper language: {whisper_lang} (from '{raw_lang}')")
 
@@ -1490,8 +1504,6 @@ def api_voice_record_and_transcribe():
 
         # Transcreve com Whisper
         print(f"🔄 [API] Transcrevendo com Whisper...")
-        print(f"📁 [API] Modelo: {voice_config.whisper_model_path}/{voice_config.whisper_model}")
-        print(f"🔧 [API] Binário: {voice_config.whisper_binary}")
 
         text = whisper_stt._transcribe_audio_file(temp_path)
         

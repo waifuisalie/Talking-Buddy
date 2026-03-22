@@ -12,16 +12,18 @@ from typing import Optional
 class SentenceDetector:
     """Detects sentence boundaries from streaming text chunks"""
 
-    def __init__(self, min_length: int = 30):
+    def __init__(self, min_length: int = 30, max_length: int = 80):
         """
         Initialize sentence detector
 
         Args:
-            min_length: Minimum characters for a valid sentence (default: 30)
+            min_length: Minimum characters before a sentence ending triggers a flush (default: 15)
+            max_length: Maximum characters to buffer before force-flushing at a word boundary (default: 30)
         """
         self.buffer = ""
         self.sentence_endings = ('.', '!', '?', ':', ';')
         self.min_sentence_length = min_length
+        self.max_sentence_length = max_length
         self.paragraph_break = '\n\n'
 
     def add_chunk(self, chunk: str):
@@ -38,6 +40,17 @@ class SentenceDetector:
         sentences = []
 
         while True:
+            # Force-flush if buffer exceeds max_length: split at last word boundary
+            if len(self.buffer) >= self.max_sentence_length:
+                cut = self.buffer.rfind(' ', 0, self.max_sentence_length)
+                if cut == -1:
+                    cut = self.max_sentence_length
+                chunk_text = self.buffer[:cut].strip()
+                if chunk_text:
+                    sentences.append(chunk_text)
+                self.buffer = self.buffer[cut:].strip()
+                continue
+
             # Collect ALL sentence ending positions in the buffer
             ending_positions = set()
             for ending in self.sentence_endings:
