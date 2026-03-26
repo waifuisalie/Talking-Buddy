@@ -1,21 +1,21 @@
 """
-Speech-to-Text module using faster-whisper - RPI5 Edition
+Speech-to-Text module using whisper.cpp CLI - RPI5 Edition
 
 This implementation:
-1. Loads the Whisper model once into RAM at startup (persistent)
-2. Records audio while user speaks using ALSA device names
-3. Detects silence to know when user finished
-4. Saves audio to temp WAV file
-5. Transcribes using faster-whisper Python API (language per request)
-6. Returns clean transcription text
+1. Records audio while user speaks using ALSA device names
+2. Detects silence to know when user finished
+3. Saves audio to temp WAV file
+4. Runs whisper-cli subprocess on the file (-t 4 -ac 512 for fast ARM inference)
+5. Returns clean transcription text
 
 RPI5 MODIFICATIONS:
 - Uses ALSA device name (plughw:CARD=Device,DEV=0) instead of card index
 - Auto-detects PyAudio device index from ALSA name for stability
-- faster-whisper replaces subprocess whisper-cli: model stays in RAM, ~1-3s latency
+- Uses -ac 512 to cap audio context window for faster Cortex-A76 inference
 """
 
 import queue
+import subprocess
 import wave
 import tempfile
 import time
@@ -90,9 +90,6 @@ class WhisperSTT:
         # Debug monitoring
         self.last_debug_time = 0
         self.debug_interval = 2.0  # Print RMS every 2 seconds in debug mode
-
-        # faster-whisper model (loaded once at start(), released at stop())
-        self._fw_model = None
 
         # Threading
         self.recording_thread = None
@@ -247,11 +244,7 @@ class WhisperSTT:
             self._processing_thread = threading.Thread(target=self._processing_worker, daemon=True, name="WhisperProcessing")
             self._processing_thread.start()
 
-            # Load faster-whisper model into RAM (once, stays loaded until stop())
-            if not self._load_fw_model():
-                return False
-
-            print("🎤 Whisper STT (faster-whisper) started successfully!")
+            print("🎤 Whisper STT (CLI mode) started successfully!")
             return True
 
         except Exception as e:
@@ -297,9 +290,6 @@ class WhisperSTT:
         if self.audio:
             self.audio.terminate()
             self.audio = None
-
-        # Release faster-whisper model from RAM
-        self._fw_model = None
 
         print("🛑 Whisper STT stopped")
 
@@ -664,45 +654,43 @@ class WhisperSTT:
         except Exception:
             return None
 
-    def _load_fw_model(self):
-        """Load faster-whisper model into RAM (idempotent — safe to call multiple times)"""
-        if self._fw_model is not None:
-            return True
-        try:
-            from faster_whisper import WhisperModel
-            model_name = getattr(self.config, 'faster_whisper_model', 'base')
-            print(f"⏳ [STT] Loading faster-whisper model '{model_name}'...")
-            self._fw_model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            print("✅ [STT] faster-whisper model loaded and ready")
-            return True
-        except ImportError:
-            print("❌ faster-whisper not installed. Run: pip install faster-whisper")
-            return False
-        except Exception as e:
-            print(f"❌ [STT] Failed to load faster-whisper model: {e}")
-            return False
-
     def _transcribe_audio_file(self, audio_path: str) -> Optional[str]:
-        """Transcribe audio file using faster-whisper (lazy-loads model on first call)"""
-        if not self._load_fw_model():
-            return None
-
+        """Transcribe audio file using whisper CLI"""
         try:
-            # Pass language directly; None triggers auto-detection
-            lang = self.config.language if self.config.language not in ("auto", "") else None
+            cmd = [
+                self.config.cli_binary,
+                "-m", self.config.model_path,
+                "-l", self.config.language,
+                "-t", str(self.config.threads),
+                "--no-timestamps",
+                "-otxt",
+                "-f", audio_path
+            ]
+            if hasattr(self.config, 'audio_ctx') and self.config.audio_ctx:
+                cmd.extend(["-ac", str(self.config.audio_ctx)])
 
-            segments, _info = self._fw_model.transcribe(
-                audio_path,
-                language=lang,
-                beam_size=1,
-                condition_on_previous_text=False,
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
-            text = " ".join(segment.text for segment in segments).strip()
-            return self._clean_transcription(text) if text else None
+            if result.returncode == 0:
+                output_file = audio_path + ".txt"
+                if Path(output_file).exists():
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        text = f.read().strip()
+                    Path(output_file).unlink(missing_ok=True)
+                    return self._clean_transcription(text)
+                else:
+                    text = result.stdout.strip()
+                    if text:
+                        return self._clean_transcription(text)
+            else:
+                print(f"❌ Whisper error: {result.stderr}")
+                return None
 
+        except subprocess.TimeoutExpired:
+            print("❌ Whisper transcription timed out")
+            return None
         except Exception as e:
-            print(f"❌ Error running faster-whisper: {e}")
+            print(f"❌ Error running whisper: {e}")
             return None
 
     def _clean_transcription(self, text: str) -> str:
@@ -727,13 +715,15 @@ class WhisperSTT:
         return text.strip()
 
     def is_available(self) -> bool:
-        """Check if faster-whisper is installed and model is loaded"""
+        """Check if whisper CLI binary and model file exist"""
         try:
-            import faster_whisper  # noqa: F401
+            if not Path(self.config.cli_binary).exists():
+                print(f"❌ Whisper binary not found: {self.config.cli_binary}")
+                return False
+            if not Path(self.config.model_path).exists():
+                print(f"❌ Whisper model not found: {self.config.model_path}")
+                return False
             return True
-        except ImportError:
-            print("❌ faster-whisper not installed. Run: pip install faster-whisper")
-            return False
         except Exception as e:
             print(f"❌ Error checking availability: {e}")
             return False

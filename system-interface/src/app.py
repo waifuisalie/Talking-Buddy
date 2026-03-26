@@ -342,12 +342,12 @@ if VOICE_ENABLED:
                     print(f"   ⚠️  Supertonic TTS falhou: {e}, usando Piper como fallback")
                     supertonic_tts_client = None
 
-            # Warmup faster-whisper STT (load model into RAM at startup)
-            print("\n3️⃣  Carregando modelo de reconhecimento de voz...")
-            if whisper_stt and whisper_stt._load_fw_model():
-                print("   ✅ faster-whisper carregado e pronto")
+            # Verify whisper CLI binary and model are present
+            print("\n3️⃣  Verificando whisper CLI...")
+            if whisper_stt and whisper_stt.is_available():
+                print("   ✅ whisper-cli encontrado e pronto")
             else:
-                print("   ⚠️  faster-whisper não disponível - STT pode não funcionar")
+                print("   ⚠️  whisper-cli não encontrado - STT pode não funcionar")
 
             # Initialize Personality Manager
             try:
