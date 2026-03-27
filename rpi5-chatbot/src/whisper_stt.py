@@ -675,6 +675,16 @@ class WhisperSTT:
 
             sample_rate = self.config.sample_rate
             chunk_size = self.config.chunk_size
+
+            # Fall back to device native rate if configured rate isn't supported
+            if device_index is not None:
+                try:
+                    audio.is_format_supported(sample_rate, input_device=device_index,
+                                              input_channels=1, input_format=pyaudio.paInt16)
+                except ValueError:
+                    sample_rate = int(audio.get_device_info_by_index(device_index)['defaultSampleRate'])
+                    print(f"⚠️  [VAD] Device doesn't support {self.config.sample_rate} Hz, using {sample_rate} Hz")
+
             stream_kwargs = {
                 'format': pyaudio.paInt16, 'channels': 1,
                 'rate': sample_rate, 'input': True,

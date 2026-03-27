@@ -340,6 +340,13 @@ try:
         os.dup2(saved_fd, 2)
         os.close(saved_fd)
 
+    # Fall back to device native rate if 16000 Hz isn't supported
+    try:
+        p.is_format_supported(SAMPLE_RATE, input_device=None,
+                              input_channels=1, input_format=pyaudio.paInt16)
+    except ValueError:
+        SAMPLE_RATE = int(p.get_default_input_device_info()['defaultSampleRate'])
+
     stream = p.open(format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
                     input=True, frames_per_buffer=CHUNK_SIZE)
 
