@@ -82,6 +82,7 @@ class WhisperSTT:
         self.silence_duration_limit = self.config.silence_duration
         self.min_audio_length = self.config.min_audio_length
         self.debug_mode = self.config.debug_mode
+        self._audio_lock = threading.Lock()  # mutual exclusion: calibration vs recording
 
         # Recording buffers
         self.audio_frames = []
@@ -484,6 +485,11 @@ class WhisperSTT:
             print("❌ PyAudio not available")
             return False
 
+        # Acquire lock — waits if calibration is running (max 3s; calibration is at most 2s)
+        if not self._audio_lock.acquire(blocking=True, timeout=3.0):
+            print("⚠️  [VAD] Could not acquire audio lock")
+            return False
+
         audio = None
         stream = None
         try:
@@ -633,6 +639,102 @@ class WhisperSTT:
                     audio.terminate()
                 except Exception:
                     pass
+            self._audio_lock.release()
+
+    def calibrate_vad(self, duration: float = 2.0) -> Optional[float]:
+        """Sample ambient noise and update silence_threshold adaptively.
+
+        Algorithm:
+          1. Sample `duration` seconds of audio (opens own stream, non-blocking lock)
+          2. Compute RMS per chunk
+          3. Reject outliers above median*3 (removes speech contamination)
+          4. new_threshold = max(20, int(mean + 2*std))
+          5. Update self.silence_threshold in place
+
+        Returns the new threshold, or None if mic was busy (skipped).
+        """
+        if not pyaudio:
+            return None
+
+        if not self._audio_lock.acquire(blocking=False):
+            print("🔧 [VAD] Calibration skipped — mic busy")
+            return None
+
+        audio = None
+        stream = None
+        try:
+            with _suppress_audio_init_noise():
+                audio = pyaudio.PyAudio()
+
+            device_index = None
+            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                device_index = self._find_device_index_by_name_with_audio(
+                    audio, self.config.capture_device_name)
+            if device_index is None and self.config.capture_device >= 0:
+                device_index = self.config.capture_device
+
+            sample_rate = self.config.sample_rate
+            chunk_size = self.config.chunk_size
+            stream_kwargs = {
+                'format': pyaudio.paInt16, 'channels': 1,
+                'rate': sample_rate, 'input': True,
+                'frames_per_buffer': chunk_size,
+            }
+            if device_index is not None:
+                stream_kwargs['input_device_index'] = device_index
+
+            stream = audio.open(**stream_kwargs)
+
+            n_chunks = int(duration * sample_rate / chunk_size)
+            rms_values = []
+            for _ in range(n_chunks):
+                data = stream.read(chunk_size, exception_on_overflow=False)
+                arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                rms_sq = np.mean(arr ** 2)
+                if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                    rms_values.append(np.sqrt(rms_sq))
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+            audio.terminate()
+            audio = None
+
+            if len(rms_values) < 3:
+                print("⚠️  [VAD] Not enough samples for calibration")
+                return None
+
+            rms_arr = np.array(rms_values)
+            median = float(np.median(rms_arr))
+            clean = rms_arr[rms_arr <= median * 3]
+            if len(clean) < 3:
+                clean = rms_arr
+
+            mean = float(np.mean(clean))
+            std = float(np.std(clean))
+            new_threshold = max(20, int(mean + 2 * std))
+
+            old = self.silence_threshold
+            self.silence_threshold = new_threshold
+            print(f"🎚️  [VAD] Calibrated: ambient={mean:.1f} ±{std:.1f} → threshold {old} → {new_threshold}")
+            return float(new_threshold)
+
+        except Exception as e:
+            print(f"❌ [VAD] Calibration error: {e}")
+            return None
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            self._audio_lock.release()
 
     def _find_device_index_by_name_with_audio(self, audio, device_name: str) -> Optional[int]:
         """Same as _find_device_index_by_name but uses a provided PyAudio instance."""

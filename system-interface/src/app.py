@@ -250,6 +250,13 @@ supertonic_tts_client = None  # Supertonic TTS (optional)
 personality_manager = None    # Personality system
 audio_player = None
 whisper_stt = None  # Whisper STT (reconhecimento de voz)
+_last_activity_time: float = 0.0  # updated on every user interaction
+
+
+def _update_activity():
+    global _last_activity_time
+    _last_activity_time = time.time()
+
 
 # Wake Word Manager (pode ser ESP32Manager ou LocalWakeWordDetector)
 wake_word_manager = None
@@ -300,7 +307,14 @@ if VOICE_ENABLED:
                     
                     # Cria instância do Whisper STT (sem callbacks ainda)
                     whisper_stt = WhisperSTT(whisper_config, callback=None)
-                    
+
+                    # Apply VAD threshold pre-calibrated by start.sh if available
+                    _vad_env = os.getenv('VAD_THRESHOLD', '')
+                    if _vad_env.isdigit():
+                        whisper_config.silence_threshold = int(_vad_env)
+                        whisper_stt.silence_threshold = int(_vad_env)
+                        print(f"   🎚️  Threshold pré-calibrado aplicado: {int(_vad_env)}")
+
                     print("✅ Whisper STT carregado (inativo - ativa sob demanda)")
                     
                 except Exception as e:
@@ -348,6 +362,20 @@ if VOICE_ENABLED:
                 print("   ✅ whisper-cli encontrado e pronto")
             else:
                 print("   ⚠️  whisper-cli não encontrado - STT pode não funcionar")
+
+            # Start background VAD recalibration thread (every 60s when idle 30s+)
+            def _vad_recalibration_loop():
+                while True:
+                    time.sleep(60)
+                    if not whisper_stt:
+                        continue
+                    idle_secs = time.time() - _last_activity_time
+                    if idle_secs >= 30:
+                        new_thresh = whisper_stt.calibrate_vad(duration=2.0)
+                        if new_thresh:
+                            print(f"🎚️  [VAD] Auto-recalibrado: threshold={new_thresh:.0f} (idle {idle_secs:.0f}s)")
+
+            threading.Thread(target=_vad_recalibration_loop, daemon=True, name="VADRecalibration").start()
 
             # Initialize Personality Manager
             try:
@@ -968,6 +996,7 @@ def api_chat_send():
         }), 503
 
     try:
+        _update_activity()
         data = request.get_json()
         user_message = data.get('message', '').strip()
         rfid = data.get('rfid', '')
@@ -1218,6 +1247,7 @@ def api_chat_send_sync():
         }), 503
 
     try:
+        _update_activity()
         data = request.get_json()
         user_message = data.get('message', '').strip()
         rfid = data.get('rfid', '')
@@ -1468,12 +1498,13 @@ def api_voice_record_and_transcribe():
         error: str (se falhar)
     """
     try:
+        _update_activity()
         if not VOICE_ENABLED or not whisper_stt:
             return jsonify({
                 'success': False,
                 'error': 'Whisper STT não disponível'
             }), 503
-        
+
         data = request.get_json() or {}
         max_duration = data.get('max_duration', 15)
 

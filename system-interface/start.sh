@@ -316,6 +316,72 @@ else
 fi
 
 # ============================================================================
+# 6b. CALIBRAR VAD (medir ruído ambiente)
+# ============================================================================
+echo ""
+echo -e "${YELLOW}[6b]${NC} Calibrando VAD para o ambiente atual..."
+
+VAD_CALIBRATION=$(python3 - <<'PYEOF'
+import os
+try:
+    import pyaudio, numpy as np
+
+    DURATION = 2.0
+    SAMPLE_RATE = 16000
+    CHUNK_SIZE = 1024
+
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fd = os.dup(2)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+    try:
+        p = pyaudio.PyAudio()
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
+
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+                    input=True, frames_per_buffer=CHUNK_SIZE)
+
+    n_chunks = int(DURATION * SAMPLE_RATE / CHUNK_SIZE)
+    rms_values = []
+    for _ in range(n_chunks):
+        data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+        arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+        rms_sq = np.mean(arr ** 2)
+        if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+            rms_values.append(np.sqrt(rms_sq))
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+    rms_arr = np.array(rms_values)
+    median = float(np.median(rms_arr))
+    clean = rms_arr[rms_arr <= median * 3]
+    if len(clean) < 3:
+        clean = rms_arr
+    mean = float(np.mean(clean))
+    std = float(np.std(clean))
+    threshold = max(20, int(mean + 2 * std))
+    print(f"OK|{threshold}|{mean:.1f}|{std:.1f}")
+except Exception as e:
+    print(f"FAIL|{e}")
+PYEOF
+)
+
+if echo "$VAD_CALIBRATION" | grep -q "^OK|"; then
+    VAD_THRESHOLD=$(echo "$VAD_CALIBRATION" | cut -d'|' -f2)
+    VAD_MEAN=$(echo "$VAD_CALIBRATION" | cut -d'|' -f3)
+    VAD_STD=$(echo "$VAD_CALIBRATION" | cut -d'|' -f4)
+    export VAD_THRESHOLD
+    echo -e "${GREEN}✓${NC} VAD calibrado: ambient=${VAD_MEAN} ±${VAD_STD} → threshold=${VAD_THRESHOLD}"
+else
+    ERR=$(echo "$VAD_CALIBRATION" | cut -d'|' -f2-)
+    echo -e "${YELLOW}⚠️  Calibração VAD falhou: ${ERR} (usando padrão=30)${NC}"
+fi
+
+# ============================================================================
 # 8. INICIAR SERVIDOR FLASK
 # ============================================================================
 echo ""
