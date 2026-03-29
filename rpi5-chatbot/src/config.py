@@ -12,12 +12,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 import os
+import time
+
+# --- Timing debug ---
+_timing_debug = False
+
+def set_timing_debug(enabled: bool):
+    global _timing_debug
+    _timing_debug = enabled
+
+def tlog(label: str, t0: float = None) -> float:
+    """Log a timing checkpoint. Returns current time.
+
+    Usage:
+        t0 = tlog("whisper-cli iniciado")          # marca início
+        tlog("transcrição concluída", t0)           # marca fim e imprime delta
+    """
+    now = time.time()
+    if _timing_debug:
+        if t0 is not None:
+            print(f"[TIMING] {label}: {now - t0:.3f}s")
+        else:
+            print(f"[TIMING] {label}")
+    return now
 
 @dataclass
 class WhisperConfig:
     # Model and binary paths - Uses home directory for portability
     model_path: str = os.path.expanduser("~/whisper.cpp/models/ggml-base.bin")  # Multilingual (PT-BR support)
     cli_binary: str = os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli")  # CLI binary (not whisper-stream!)
+    faster_whisper_model: str = "base"  # faster-whisper model name or local CTranslate2 path
 
     # Language and processing
     language: str = "pt"  # Portuguese (change to "en" for English)

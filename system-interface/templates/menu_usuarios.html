@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Gerenciar Usuários{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">GERENCIAR USUARIOS</div>
+    
+    <div class="box-content">
+        <div class="btn-grid btn-grid-2col">
+            <button class="btn btn-primary" onclick="navigateTo('/usuarios/novo')">
+                ADICIONAR USUARIO
+            </button>
+            
+            <button class="btn" onclick="navigateTo('/usuarios/lista')">
+                LISTAR USUARIOS
+            </button>
+            
+            <button class="btn" onclick="navigateTo('/admin/alterar-senha')">
+                ALTERAR SENHA
+            </button>
+            
+            <button class="btn" onclick="navigateTo('/logout')">
+                SAIR
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}

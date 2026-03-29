@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import Optional
 import numpy as np
+import config as _config
 
 # Personality-to-Voice mapping (9 personalities → 8 unique voices)
 PERSONALITY_VOICES = {
@@ -87,6 +88,7 @@ class SupertonicTTS:
             print(f"🔊 Generating speech ({voice_id}): '{clean_text[:50]}{'...' if len(clean_text) > 50 else ''}'")
 
             # Synthesize audio
+            t_tts = _config.tlog(f"[TTS] síntese iniciada ({len(clean_text)} chars)")
             wav_array, duration = self.tts.synthesize(
                 clean_text,
                 voice_style=voice_style,
@@ -95,6 +97,7 @@ class SupertonicTTS:
 
             # Save to file
             self.tts.save_audio(wav_array, output_file)
+            _config.tlog("[TTS] síntese concluída", t_tts)
 
             if Path(output_file).exists():
                 # Track temp file for cleanup

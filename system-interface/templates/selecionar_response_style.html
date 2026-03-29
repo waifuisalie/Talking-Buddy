@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Selecionar Estilo de Resposta da IA{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">ESTILO DE RESPOSTA DA IA</div>
+    <div class="box-content">
+        <div class="btn-grid-2col">
+            <button class="btn btn-selection" onclick="selectOption('short (objective)')">CURTO (OBJETIVO)</button>
+            <button class="btn btn-selection" onclick="selectOption('neutral (balanced)')">NEUTRO (BALANCEADO)</button>
+            <button class="btn btn-selection" onclick="selectOption('detailed (explanatory)')">DETALHADO (EXPLICATIVO)</button>
+            <button class="btn btn-selection" onclick="selectOption('formal (business)')">FORMAL (NEGOCIO)</button>
+            <button class="btn btn-selection" onclick="selectOption('casual (chatty)')">CASUAL (CONVERSADOR)</button>
+        </div>
+        <div class="btn-stack btn-stack-top-spaced">
+            <button class="btn btn-secondary" onclick="goBackToForm()">CANCELAR</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function selectOption(value) {
+    sessionStorage.setItem('response_style', value);
+    
+    // Verifica se está editando
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+    
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+
+function goBackToForm() {
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+    
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+</script>
+{% endblock %}

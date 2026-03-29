@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Confirmar Saida{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">TEM CERTEZA QUE DESEJA SAIR?</div>
+    <div class="box-content">
+        <div class="btn-grid-2col">
+            <form method="POST" action="{{ url_for('logout') }}" class="btn-form">
+                <button type="submit" class="btn btn-danger btn-full-width">SIM, SAIR</button>
+            </form>
+            <a href="{{ url_for('menu_usuarios') }}" class="btn">CANCELAR</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

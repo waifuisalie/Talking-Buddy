@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Aguardando RFID{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">AGUARDANDO LEITURA DO RFID</div>
+    <div class="box-content">
+        <div class="rfid-waiting">
+            <div class="rfid-icon">
+                <div class="rfid-pulse"></div>
+                <div class="rfid-card">RFID</div>
+            </div>
+            <p class="rfid-message">Aproxime o cartao RFID do leitor...</p>
+            <div class="rfid-display" id="rfid-display">Aguardando...</div>
+        </div>
+        
+        <div class="btn-stack btn-stack-top-extra-spaced">
+            <button class="btn btn-secondary" onclick="cancelAndGoBack()">CANCELAR</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let pollingInterval = null;
+
+// Som é tocado via backend (playFeedbackSound) - não precisa de AudioContext aqui
+// Código antigo de AudioContext removido pois não funcionava de forma confiável
+
+// Inicia o leitor RFID ao carregar a página
+window.addEventListener('DOMContentLoaded', function() {
+    fetch('/usuarios/rfid/start', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    }).then(response => response.json())
+      .then(data => {
+          if (data.success) {
+              console.log('Leitor RFID iniciado');
+              startPolling();
+          } else {
+              console.error('Erro ao iniciar leitor RFID:', data.error);
+              showPopup('Erro ao iniciar leitor RFID: ' + (data.error || 'Desconhecido'));
+          }
+      })
+      .catch(error => {
+          console.error('Erro:', error);
+          showPopup('Erro ao conectar com o leitor RFID');
+      });
+});
+
+// Para o leitor ao sair da página
+window.addEventListener('beforeunload', function() {
+    stopRFIDReader();
+});
+
+function startPolling() {
+    console.log('[aguardar_rfid] Iniciando polling...');
+    let pollAttempts = 0;
+    
+    // Verifica a cada 500ms se há um RFID lido (mais rápido que robô)
+    pollingInterval = setInterval(function() {
+        pollAttempts++;
+        
+        fetch('/usuarios/rfid/poll')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (pollAttempts % 10 === 0) {
+                    console.log(`[aguardar_rfid] Poll #${pollAttempts} - OK`);
+                }
+                
+                if (data.success && data.rfid) {
+                    // RFID detectado!
+                    console.log('✅ RFID:', data.rfid);
+                    
+                    // Tocar som via backend (funciona sempre!)
+                    fetch('/api/feedback/play/rfid_detected', { method: 'POST' })
+                        .catch(err => console.log('⚠️ Erro ao tocar som:', err));
+                    
+                    document.getElementById('rfid-display').textContent = data.rfid;
+                    
+                    // Para o polling IMEDIATAMENTE
+                    if (pollingInterval) {
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                    }
+                    
+                    // IMPORTANTE: Marca que está navegando para não limpar storage
+                    sessionStorage.setItem('navigating_selection', 'true');
+                    
+                    // Salva no sessionStorage
+                    sessionStorage.setItem('rfid', data.rfid);
+                    
+                    // Para o leitor
+                    stopRFIDReader();
+                    
+                    // Aguarda 1 segundo e redireciona
+                    setTimeout(function() {
+                        const editingMode = sessionStorage.getItem('editing_mode');
+                        const userId = sessionStorage.getItem('editing_user_id');
+                        
+                        if (editingMode === 'true' && userId) {
+                            window.location.href = `/usuarios/editar/${userId}`;
+                        } else {
+                            window.location.href = "{{ url_for('novo_usuario') }}";
+                        }
+                    }, 1000);
+                }
+            })
+            .catch(error => {
+                if (pollAttempts % 20 === 1) {  // Log erro a cada 6 segundos
+                    console.error('[aguardar_rfid] Erro no polling:', error);
+                }
+            });
+    }, 500);  // 500ms - mais rápido que tela do robô
+    
+    console.log('[aguardar_rfid] Polling configurado (intervalo: 500ms)');
+}
+
+function stopRFIDReader() {
+    console.log('[aguardar_rfid] Parando leitor RFID...');
+    
+    // Para o polling
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+        console.log('[aguardar_rfid] Polling parado');
+    }
+    
+    // Para o processo do leitor (sem @login_required)
+    // Nota: Esta rota requer login, então pode falhar se não estiver logado
+    // mas não é crítico pois o processo será parado no próximo start
+    fetch('/usuarios/rfid/stop', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('[aguardar_rfid] Processo RFID parado');
+        } else {
+            console.log('[aguardar_rfid] Aviso ao parar processo:', data.error);
+        }
+    })
+    .catch(error => {
+        console.log('[aguardar_rfid] Aviso: Não foi possível parar processo (normal se não logado):', error);
+    });
+}
+
+// Botão cancelar também para o leitor
+function cancelAndGoBack() {
+    stopRFIDReader();
+    
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+    
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+</script>
+{% endblock %}

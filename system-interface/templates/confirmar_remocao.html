@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Confirmar Remocao{% endblock %}
+
+{% block content %}
+<div class="box box-centered">
+    <div class="box-header">CONFIRMAR REMOCAO</div>
+    <div class="box-content">
+        <div class="confirmation-message-centered">
+            <p>Tem certeza que deseja remover?</p>
+            <div class="user-card-confirm">
+                <div class="user-card-name">{{ user.name }}</div>
+                <div class="user-card-detail">RFID: {{ user.rfid }}</div>
+            </div>
+        </div>
+        
+        <form method="POST" action="{{ url_for('remover_usuario', user_id=user.id) }}">
+            <div class="btn-stack">
+                <button type="submit" class="btn btn-danger">CONFIRMAR REMOCAO</button>
+                <a href="{{ url_for('lista_usuarios') }}" class="btn btn-secondary">CANCELAR</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Lista de Usuarios{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">LISTA DE USUARIOS</div>
+    <div class="box-content">
+        {% if users %}
+        <div class="user-list">
+            {% for user in users %}
+            <div class="user-item">
+                <div class="user-info">
+                    <strong>{{ user.name }}</strong>
+                    <div class="user-details">
+                        <span>RFID: {{ user.rfid }}</span>
+                        <span>Estilo: {% if user.response_style == 'short (objective)' %}Curto (Objetivo)
+                                      {% elif user.response_style == 'neutral (balanced)' %}Neutro (Equilibrado)
+                                      {% elif user.response_style == 'detailed (explanatory)' %}Detalhado (Explicativo)
+                                      {% elif user.response_style == 'formal (business)' %}Formal (Profissional)
+                                      {% elif user.response_style == 'casual (chatty)' %}Casual (Conversacional)
+                                      {% else %}{{ user.response_style }}{% endif %}</span>
+                        <span>Gênero: {% if user.persona_gender == 'male' %}Masculino{% elif user.persona_gender == 'female' %}Feminino{% else %}{{ user.persona_gender }}{% endif %}</span>
+                        <span>Idioma: {% if user.language == 'pt-BR' %}Português (Brasil)
+                                       {% elif user.language == 'en-US' %}Inglês (EUA)
+                                       {% elif user.language == 'es-ES' %}Espanhol (Espanha)
+                                       {% else %}{{ user.language }}{% endif %}</span>
+                    </div>
+                </div>
+                <div class="user-actions">
+                    <a href="{{ url_for('editar_usuario', user_id=user.id) }}" class="btn btn-secondary btn-small">EDITAR</a>
+                    <a href="{{ url_for('confirmar_remocao', user_id=user.id) }}" class="btn btn-danger btn-small">REMOVER</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-message">
+            <p>Nenhum usuario cadastrado</p>
+        </div>
+        {% endif %}
+        
+        <div class="btn-stack btn-stack-top-spaced">
+            <a href="{{ url_for('menu_usuarios') }}" class="btn btn-secondary">VOLTAR</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

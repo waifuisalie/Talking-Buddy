@@ -42,16 +42,18 @@ import audio_device_detector
 class SentenceDetector:
     """Detects sentence boundaries from streaming text chunks"""
 
-    def __init__(self, min_length: int = 30):
+    def __init__(self, min_length: int = 15, max_length: int = 30):
         """
         Initialize sentence detector
 
         Args:
-            min_length: Minimum characters for a valid sentence (default: 30)
+            min_length: Minimum characters before a sentence ending triggers a flush (default: 15)
+            max_length: Maximum characters to buffer before force-flushing at a word boundary (default: 30)
         """
         self.buffer = ""
         self.sentence_endings = ('.', '!', '?', ':', ';')
         self.min_sentence_length = min_length
+        self.max_sentence_length = max_length
         self.paragraph_break = '\n\n'  # Double newline indicates paragraph break
 
     def add_chunk(self, chunk: str):
@@ -68,9 +70,19 @@ class SentenceDetector:
         self.buffer += chunk
         sentences = []
 
-        # Find sentence boundaries
         while True:
-            # Collect ALL sentence ending positions in the buffer
+            # Force-flush if buffer exceeds max_length: split at last word boundary
+            if len(self.buffer) >= self.max_sentence_length:
+                cut = self.buffer.rfind(' ', 0, self.max_sentence_length)
+                if cut == -1:
+                    cut = self.max_sentence_length
+                chunk_text = self.buffer[:cut].strip()
+                if chunk_text:
+                    sentences.append(chunk_text)
+                self.buffer = self.buffer[cut:].strip()
+                continue
+
+            # Find sentence boundaries
             ending_positions = set()
             for ending in self.sentence_endings:
                 pos = 0
@@ -118,7 +130,7 @@ class SentenceDetector:
 class StreamingTTSProcessor:
     """Processes streaming LLM chunks into TTS audio queue"""
 
-    def __init__(self, tts_engine, audio_player, min_sentence_length: int = 30):
+    def __init__(self, tts_engine, audio_player, min_sentence_length: int = 15):
         """
         Initialize streaming TTS processor
 
@@ -604,6 +616,7 @@ class VoiceChatbot:
         """Handle user input with streaming LLM and incremental TTS"""
         try:
             self.is_processing = True
+            t_pipeline = config.tlog("[PIPELINE] transcrição recebida, iniciando resposta")
             self.state_manager.set_state("processing")
 
             # Add user message to history
@@ -624,6 +637,7 @@ class VoiceChatbot:
                 nonlocal first_audio_played
                 if not first_audio_played:
                     first_audio_played = True
+                    config.tlog("[PIPELINE] primeiro áudio tocando", t_pipeline)
                     self.state_manager.set_state("speaking")
                     if self.whisper_stt:
                         self.whisper_stt.pause_recording()

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Alterar Senha{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">ALTERAR SENHA DO ADMINISTRADOR</div>
+    <div class="box-content">
+        <form method="POST" action="{{ url_for('alterar_senha') }}">
+            <div class="form-group form-group-spaced">
+                <label for="new_password">NOVA SENHA:</label>
+                <input 
+                    type="password" 
+                    id="new_password" 
+                    name="new_password" 
+                    class="keyboard-trigger" 
+                    readonly
+                    required
+                >
+            </div>
+            
+            <div class="form-group form-group-spaced">
+                <label for="confirm_password">CONFIRMAR NOVA SENHA:</label>
+                <input 
+                    type="password" 
+                    id="confirm_password" 
+                    name="confirm_password" 
+                    class="keyboard-trigger" 
+                    readonly
+                    required
+                >
+            </div>
+            
+            <div class="btn-stack">
+                <button type="submit" class="btn btn-primary">ALTERAR SENHA</button>
+                <a href="{{ url_for('menu_usuarios') }}" class="btn btn-secondary">CANCELAR</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if error %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    showPopup('{{ error }}');
+});
+</script>
+{% endif %}
+
+{% if success %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    showPopup('{{ success }}');
+    setTimeout(function() {
+        window.location.href = "{{ url_for('menu_usuarios') }}";
+    }, 2000);
+});
+</script>
+{% endif %}
+
+{% endblock %}

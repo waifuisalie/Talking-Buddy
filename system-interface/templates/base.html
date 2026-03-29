@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Sistema de Cadastro{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Matrix Rain Background -->
+    <canvas id="matrix-canvas"></canvas>
+    
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+    
+    <!-- Teclado Virtual -->
+    <div id="virtual-keyboard" class="keyboard-overlay">
+        <div class="keyboard-container">
+            <div class="keyboard-header">
+                <span id="keyboard-title">Digite:</span>
+            </div>
+            
+            <div class="keyboard-input-display">
+                <span id="keyboard-display"><span id="keyboard-text"></span><span class="cursor">|</span></span>
+            </div>
+            
+            <div class="keyboard">
+                <div class="keyboard-keys">
+                    <div class="keyboard-row">
+                        <button class="key" data-key="1">1</button>
+                        <button class="key" data-key="2">2</button>
+                        <button class="key" data-key="3">3</button>
+                        <button class="key" data-key="4">4</button>
+                        <button class="key" data-key="5">5</button>
+                        <button class="key" data-key="6">6</button>
+                        <button class="key" data-key="7">7</button>
+                        <button class="key" data-key="8">8</button>
+                        <button class="key" data-key="9">9</button>
+                        <button class="key" data-key="0">0</button>
+                        <button class="key key-backspace" data-key="backspace">APAGAR</button>
+                    </div>
+                    
+                    <div class="keyboard-row">
+                        <button class="key" data-key="q">q</button>
+                        <button class="key" data-key="w">w</button>
+                        <button class="key" data-key="e">e</button>
+                        <button class="key" data-key="r">r</button>
+                        <button class="key" data-key="t">t</button>
+                        <button class="key" data-key="y">y</button>
+                        <button class="key" data-key="u">u</button>
+                        <button class="key" data-key="i">i</button>
+                        <button class="key" data-key="o">o</button>
+                        <button class="key" data-key="p">p</button>
+                        <button class="key" data-key="@">@</button>
+                    </div>
+                    
+                    <div class="keyboard-row">
+                        <button class="key key-shift" data-key="shift">SHIFT</button>
+                        <button class="key" data-key="a">a</button>
+                        <button class="key" data-key="s">s</button>
+                        <button class="key" data-key="d">d</button>
+                        <button class="key" data-key="f">f</button>
+                        <button class="key" data-key="g">g</button>
+                        <button class="key" data-key="h">h</button>
+                        <button class="key" data-key="j">j</button>
+                        <button class="key" data-key="k">k</button>
+                        <button class="key" data-key="l">l</button>
+                        <button class="key" data-key="#">#</button>
+                    </div>
+                    
+                    <div class="keyboard-row">
+                        <button class="key" data-key="!">!</button>
+                        <button class="key" data-key="z">z</button>
+                        <button class="key" data-key="x">x</button>
+                        <button class="key" data-key="c">c</button>
+                        <button class="key" data-key="v">v</button>
+                        <button class="key" data-key="b">b</button>
+                        <button class="key" data-key="n">n</button>
+                        <button class="key" data-key="m">m</button>
+                        <button class="key" data-key=".">.</button>
+                        <button class="key" data-key=",">,</button>
+                        <button class="key" data-key="?">?</button>
+                    </div>
+                    
+                    <div class="keyboard-row keyboard-row-bottom">
+                        <button class="key" data-key="*">*</button>
+                        <button class="key" data-key="()">(</button>
+                        <button class="key" data-key=")">)</button>
+                        <button class="key" data-key="-">-</button>
+                        <button class="key" data-key="_">_</button>
+                        <button class="key key-space" data-key="space">ESPACO</button>
+                        <button class="key" data-key="+">+</button>
+                        <button class="key" data-key="=">=</button>
+                        <button class="key" data-key="/">/</button>
+                    </div>
+                </div>
+                
+                <div class="keyboard-actions">
+                    <button class="btn-keyboard-cancel" onclick="closeKeyboard()">CANCELAR</button>
+                    <button class="btn-keyboard-ok" onclick="confirmKeyboard()">CONFIRMAR</button>
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Popup Personalizado -->
+    <div id="custom-popup" class="custom-popup-overlay">
+        <div class="custom-popup">
+            <div class="custom-popup-message" id="popup-message"></div>
+            <button class="custom-popup-btn" onclick="closePopup()">OK</button>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -112,6 +112,7 @@ class OllamaLLM:
                 }
             }
 
+            t_llm = config.tlog("[LLM] request enviado ao Ollama")
             response = requests.post(
                 self.config.url,
                 json=payload,
@@ -121,15 +122,20 @@ class OllamaLLM:
 
             if response.status_code == 200:
                 full_response = ""
+                first_token = True
                 for line in response.iter_lines():
                     if line:
                         data = json.loads(line)
                         if 'message' in data and 'content' in data['message']:
                             chunk = data['message']['content']
+                            if first_token and chunk:
+                                config.tlog("[LLM] primeiro token recebido", t_llm)
+                                first_token = False
                             full_response += chunk
                             yield chunk
 
                         if data.get('done', False):
+                            config.tlog("[LLM] geração concluída", t_llm)
                             break
 
                 # Update conversation history with complete response

@@ -9,7 +9,7 @@
 FROM tinyllama:latest
 
 # System instruction to always respond in Brazilian Portuguese
-SYSTEM Você é um assistente útil e prestativo. Sempre responda em português brasileiro, independentemente do idioma da pergunta. Seja claro, conciso e natural em suas respostas.
+SYSTEM Você é um assistente útil e prestativo. Seja claro, conciso e natural em suas respostas.
 
 # Keep the same parameters as the base model
 PARAMETER temperature 0.7

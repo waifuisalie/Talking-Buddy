@@ -1,16 +1,17 @@
 """
-Speech-to-Text module using whisper.cpp CLI (not stream) - RPI5 Edition
+Speech-to-Text module using whisper.cpp CLI - RPI5 Edition
 
 This implementation:
 1. Records audio while user speaks using ALSA device names
 2. Detects silence to know when user finished
 3. Saves audio to temp WAV file
-4. Runs whisper CLI on the file
+4. Runs whisper-cli subprocess on the file (-t 4 -ac 512 for fast ARM inference)
 5. Returns clean transcription text
 
 RPI5 MODIFICATIONS:
 - Uses ALSA device name (plughw:CARD=Device,DEV=0) instead of card index
 - Auto-detects PyAudio device index from ALSA name for stability
+- Uses -ac 512 to cap audio context window for faster Cortex-A76 inference
 """
 
 import queue
@@ -34,6 +35,26 @@ try:
 except ImportError:
     print("⚠️  PyAudio not installed. Run: pip install pyaudio")
     pyaudio = None
+
+from contextlib import contextmanager
+
+@contextmanager
+def _suppress_audio_init_noise():
+    """Redirect fd 2 to /dev/null during PyAudio() init.
+
+    redirect_stderr() only moves Python's sys.stderr; ALSA and Jack write
+    directly to the underlying OS file-descriptor 2, so they slip through.
+    Replacing fd 2 at the OS level silences both.
+    """
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fd = os.dup(2)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+    try:
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
 
 import config
 
@@ -61,6 +82,7 @@ class WhisperSTT:
         self.silence_duration_limit = self.config.silence_duration
         self.min_audio_length = self.config.min_audio_length
         self.debug_mode = self.config.debug_mode
+        self._audio_lock = threading.Lock()  # mutual exclusion: calibration vs recording
 
         # Recording buffers
         self.audio_frames = []
@@ -127,11 +149,8 @@ class WhisperSTT:
             return False
 
         try:
-            # Suppress ALSA warnings (cosmetic only, doesn't affect functionality)
-            from contextlib import redirect_stderr
-            with open(os.devnull, 'w') as devnull:
-                with redirect_stderr(devnull):
-                    self.audio = pyaudio.PyAudio()
+            with _suppress_audio_init_noise():
+                self.audio = pyaudio.PyAudio()
 
             # Auto-detect input device if enabled
             device_index = None
@@ -222,7 +241,7 @@ class WhisperSTT:
             self.recording_thread = threading.Thread(target=self._recording_loop, daemon=True, name="WhisperRecording")
             self.recording_thread.start()
 
-            # Start processing worker thread (runs Whisper CLI asynchronously)
+            # Start processing worker thread (runs Whisper asynchronously)
             self._processing_thread = threading.Thread(target=self._processing_worker, daemon=True, name="WhisperProcessing")
             self._processing_thread.start()
 
@@ -368,6 +387,7 @@ class WhisperSTT:
                     else:
                         # Long enough silence — hand off to worker immediately
                         print(f"🤐 Silence detected ({silence_duration:.1f}s), processing...")
+                        config.tlog("[STT] fim de fala detectado pelo VAD")
                         frames = self.audio_frames
                         self.audio_frames = []      # reset buffer immediately
                         self.is_recording = False   # reset VAD state immediately
@@ -436,8 +456,10 @@ class WhisperSTT:
 
             print(f"💾 Audio saved ({duration:.1f}s), transcribing...")
 
-            # Run whisper CLI (blocking, but we're in the worker thread)
+            # Run faster-whisper (blocking, but we're in the worker thread)
+            t_stt = config.tlog("[STT] faster-whisper iniciado")
             transcription = self._transcribe_audio_file(temp_path)
+            config.tlog("[STT] transcrição concluída", t_stt)
 
             # Cleanup temp file
             Path(temp_path).unlink(missing_ok=True)
@@ -451,45 +473,324 @@ class WhisperSTT:
         except Exception as e:
             print(f"❌ Error processing audio: {e}")
 
+    def record_utterance_to_file(self, output_path: str, max_duration: float = 15.0) -> bool:
+        """Record one utterance using VAD and save to a WAV file.
+
+        Opens its own independent PyAudio stream so it works even when the
+        background recording loop is not running (e.g. web API usage).
+
+        Returns True if speech was captured, False if silence/timeout/error.
+        """
+        if not pyaudio:
+            print("❌ PyAudio not available")
+            return False
+
+        # Acquire lock — waits if calibration is running (max 3s; calibration is at most 2s)
+        if not self._audio_lock.acquire(blocking=True, timeout=3.0):
+            print("⚠️  [VAD] Could not acquire audio lock")
+            return False
+
+        audio = None
+        stream = None
+        try:
+            with _suppress_audio_init_noise():
+                audio = pyaudio.PyAudio()
+
+            # Resolve device index the same way start() does
+            device_index = None
+            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                os.environ['AUDIODEV'] = self.config.capture_device_name
+                device_index = self._find_device_index_by_name_with_audio(
+                    audio, self.config.capture_device_name)
+            if device_index is None and self.config.capture_device >= 0:
+                device_index = self.config.capture_device
+
+            sample_rate = self.config.sample_rate
+            chunk_size = self.config.chunk_size
+
+            # Fall back to device's native rate if 16000 Hz isn't supported
+            if device_index is not None:
+                try:
+                    audio.is_format_supported(
+                        sample_rate,
+                        input_device=device_index,
+                        input_channels=1,
+                        input_format=pyaudio.paInt16
+                    )
+                except ValueError:
+                    native_rate = int(audio.get_device_info_by_index(device_index)['defaultSampleRate'])
+                    print(f"⚠️  [VAD] Device doesn't support {sample_rate} Hz, using native {native_rate} Hz")
+                    sample_rate = native_rate
+
+            stream_kwargs = {
+                'format': pyaudio.paInt16,
+                'channels': 1,
+                'rate': sample_rate,
+                'input': True,
+                'frames_per_buffer': chunk_size,
+            }
+            if device_index is not None:
+                stream_kwargs['input_device_index'] = device_index
+
+            stream = audio.open(**stream_kwargs)
+
+            chunks_per_second = sample_rate / chunk_size
+            rms_window_size = max(3, int(0.2 * chunks_per_second))
+            rms_history = deque(maxlen=rms_window_size)
+
+            silence_threshold = self.silence_threshold
+            silence_duration_limit = self.silence_duration_limit
+
+            frames = []
+            recording = False
+            last_speech_time = None
+            start_time = time.time()
+            last_rms_print = 0.0
+            rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
+
+            # Discard the first 700ms of audio to let any feedback sounds (e.g.
+            # chat_open beep) decay before VAD starts listening.
+            discard_chunks = int(0.7 * sample_rate / chunk_size)
+            for _ in range(discard_chunks):
+                stream.read(chunk_size, exception_on_overflow=False)
+
+            print("👂 [VAD] Waiting for speech...")
+            if self.debug_mode:
+                print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
+
+            while True:
+                elapsed = time.time() - start_time
+                if elapsed >= max_duration:
+                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached")
+                    break
+
+                audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+                try:
+                    rms_squared = np.mean(audio_array.astype(np.float64) ** 2)
+                    rms_instant = 0.0 if (np.isnan(rms_squared) or np.isinf(rms_squared) or rms_squared < 0) else np.sqrt(rms_squared)
+                except (ValueError, RuntimeWarning):
+                    rms_instant = 0.0
+
+                rms_history.append(rms_instant)
+                rms = sum(rms_history) / len(rms_history)
+
+                # Periodic RMS debug output
+                if self.debug_mode:
+                    now = time.time()
+                    if now - last_rms_print >= rms_print_interval:
+                        state = "🗣️  FALA " if rms > silence_threshold else "🤫 silêncio"
+                        print(f"🔊 [VAD] RMS: {rms:6.1f} (raw {rms_instant:5.0f}) | threshold: {silence_threshold} | {state}")
+                        last_rms_print = now
+
+                if rms > silence_threshold:
+                    if not recording:
+                        print("🗣️  [VAD] Speech detected, recording...")
+                        recording = True
+                    frames.append(audio_data)
+                    last_speech_time = time.time()
+                elif recording:
+                    frames.append(audio_data)
+                    silence_elapsed = time.time() - last_speech_time
+                    if silence_elapsed >= silence_duration_limit:
+                        print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
+                        break
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+            audio.terminate()
+            audio = None
+
+            if not frames:
+                print("⚠️  [VAD] No speech detected")
+                return False
+
+            # Check minimum audio length
+            duration = len(frames) * chunk_size / sample_rate
+            if duration < self.min_audio_length:
+                print(f"⚠️  [VAD] Audio too short ({duration:.2f}s)")
+                return False
+
+            # Save to WAV (paInt16 = 2 bytes per sample)
+            # whisper.cpp handles resampling internally if rate != 16000
+            with wave.open(output_path, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(b''.join(frames))
+
+            print(f"💾 [VAD] Saved {duration:.1f}s of audio to {output_path}")
+            return True
+
+        except Exception as e:
+            print(f"❌ [VAD] Error during recording: {e}")
+            return False
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            self._audio_lock.release()
+
+    def calibrate_vad(self, duration: float = 2.0) -> Optional[float]:
+        """Sample ambient noise and update silence_threshold adaptively.
+
+        Algorithm:
+          1. Sample `duration` seconds of audio (opens own stream, non-blocking lock)
+          2. Compute RMS per chunk
+          3. Reject outliers above median*3 (removes speech contamination)
+          4. new_threshold = max(20, int(mean + 2*std))
+          5. Update self.silence_threshold in place
+
+        Returns the new threshold, or None if mic was busy (skipped).
+        """
+        if not pyaudio:
+            return None
+
+        if not self._audio_lock.acquire(blocking=False):
+            print("🔧 [VAD] Calibration skipped — mic busy")
+            return None
+
+        audio = None
+        stream = None
+        try:
+            with _suppress_audio_init_noise():
+                audio = pyaudio.PyAudio()
+
+            device_index = None
+            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                device_index = self._find_device_index_by_name_with_audio(
+                    audio, self.config.capture_device_name)
+            if device_index is None and self.config.capture_device >= 0:
+                device_index = self.config.capture_device
+
+            sample_rate = self.config.sample_rate
+            chunk_size = self.config.chunk_size
+
+            # Fall back to device native rate if configured rate isn't supported
+            if device_index is not None:
+                try:
+                    audio.is_format_supported(sample_rate, input_device=device_index,
+                                              input_channels=1, input_format=pyaudio.paInt16)
+                except ValueError:
+                    sample_rate = int(audio.get_device_info_by_index(device_index)['defaultSampleRate'])
+                    print(f"⚠️  [VAD] Device doesn't support {self.config.sample_rate} Hz, using {sample_rate} Hz")
+
+            stream_kwargs = {
+                'format': pyaudio.paInt16, 'channels': 1,
+                'rate': sample_rate, 'input': True,
+                'frames_per_buffer': chunk_size,
+            }
+            if device_index is not None:
+                stream_kwargs['input_device_index'] = device_index
+
+            stream = audio.open(**stream_kwargs)
+
+            n_chunks = int(duration * sample_rate / chunk_size)
+            rms_values = []
+            for _ in range(n_chunks):
+                data = stream.read(chunk_size, exception_on_overflow=False)
+                arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                rms_sq = np.mean(arr ** 2)
+                if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                    rms_values.append(np.sqrt(rms_sq))
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+            audio.terminate()
+            audio = None
+
+            if len(rms_values) < 3:
+                print("⚠️  [VAD] Not enough samples for calibration")
+                return None
+
+            rms_arr = np.array(rms_values)
+            median = float(np.median(rms_arr))
+            clean = rms_arr[rms_arr <= median * 3]
+            if len(clean) < 3:
+                clean = rms_arr
+
+            mean = float(np.mean(clean))
+            std = float(np.std(clean))
+            new_threshold = max(20, int(mean + 2 * std))
+
+            old = self.silence_threshold
+            self.silence_threshold = new_threshold
+            print(f"🎚️  [VAD] Calibrated: ambient={mean:.1f} ±{std:.1f} → threshold {old} → {new_threshold}")
+            return float(new_threshold)
+
+        except Exception as e:
+            print(f"❌ [VAD] Calibration error: {e}")
+            return None
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            self._audio_lock.release()
+
+    def _find_device_index_by_name_with_audio(self, audio, device_name: str) -> Optional[int]:
+        """Same as _find_device_index_by_name but uses a provided PyAudio instance."""
+        try:
+            import re
+            device_name_lower = device_name.lower()
+            for i in range(audio.get_device_count()):
+                info = audio.get_device_info_by_index(i)
+                if info['maxInputChannels'] > 0:
+                    info_name_lower = info['name'].lower()
+                    if device_name_lower in info_name_lower:
+                        return i
+                    if 'usb' in device_name_lower and 'usb' in info_name_lower:
+                        return i
+                    card_match = re.search(r'CARD=([^,]+)', device_name)
+                    if card_match and card_match.group(1).lower() in info_name_lower:
+                        return i
+            return None
+        except Exception:
+            return None
+
     def _transcribe_audio_file(self, audio_path: str) -> Optional[str]:
         """Transcribe audio file using whisper CLI"""
         try:
-            # Build whisper command
             cmd = [
                 self.config.cli_binary,
                 "-m", self.config.model_path,
                 "-l", self.config.language,
                 "-t", str(self.config.threads),
                 "--no-timestamps",
-                "-otxt",  # Output as text
+                "-otxt",
                 "-f", audio_path
             ]
-
-            # Add optional flags
             if hasattr(self.config, 'audio_ctx') and self.config.audio_ctx:
                 cmd.extend(["-ac", str(self.config.audio_ctx)])
 
-            # Run whisper
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             if result.returncode == 0:
-                # Read output text file (whisper creates filename.wav.txt)
                 output_file = audio_path + ".txt"
                 if Path(output_file).exists():
                     with open(output_file, 'r', encoding='utf-8') as f:
                         text = f.read().strip()
-
-                    # Cleanup output file
                     Path(output_file).unlink(missing_ok=True)
-
                     return self._clean_transcription(text)
                 else:
-                    # Fallback: parse stdout
                     text = result.stdout.strip()
                     if text:
                         return self._clean_transcription(text)
@@ -526,16 +827,14 @@ class WhisperSTT:
         return text.strip()
 
     def is_available(self) -> bool:
-        """Check if whisper CLI is available"""
+        """Check if whisper CLI binary and model file exist"""
         try:
             if not Path(self.config.cli_binary).exists():
                 print(f"❌ Whisper binary not found: {self.config.cli_binary}")
                 return False
-
             if not Path(self.config.model_path).exists():
                 print(f"❌ Whisper model not found: {self.config.model_path}")
                 return False
-
             return True
         except Exception as e:
             print(f"❌ Error checking availability: {e}")

@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Editar Usuario' if user else 'Novo Usuario' }}{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">{{ 'EDITAR USUARIO' if user else 'NOVO USUARIO' }}</div>
+    <div class="box-content">
+        <form method="POST" id="userForm">
+            <div class="form-group">
+                <label for="name">NOME:</label>
+                <input type="text" 
+                       id="name" 
+                       name="name" 
+                       class="keyboard-trigger" 
+                       value="{{ user.name if user else '' }}" 
+                       required 
+                       autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label class="form-group-label-spaced">CONFIGURACOES:</label>
+                <div class="btn-grid-2col">
+                    {% if not user %}
+                    <div>
+                        <input type="hidden" id="rfid" name="rfid" value="" required>
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/aguardar-rfid')">
+                            <span class="btn-label">RFID</span>
+                            <span id="rfid_display" class="btn-value">Clique para ler</span>
+                        </button>
+                    </div>
+                    {% else %}
+                    <div>
+                        <input type="hidden" id="rfid" name="rfid" value="{{ user.rfid }}" required>
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/aguardar-rfid')">
+                            <span class="btn-label">RFID</span>
+                            <span id="rfid_display" class="btn-value">{{ user.rfid }}</span>
+                        </button>
+                    </div>
+                    {% endif %}
+                    
+                    <div>
+                        <input type="hidden" id="response_style" name="response_style" value="{{ user.response_style if user else '' }}">
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/selecionar-response-style')">
+                            <span class="btn-label">ESTILO DE RESPOSTA DA IA</span>
+                            <span id="response_style_display" class="btn-value">Selecione...</span>
+                        </button>
+                    </div>
+                    
+                    <div>
+                        <input type="hidden" id="persona_gender" name="persona_gender" value="{{ user.persona_gender if user else '' }}">
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/selecionar-persona-gender')">
+                            <span class="btn-label">GENERO DA IA</span>
+                            <span id="persona_gender_display" class="btn-value">Selecione...</span>
+                        </button>
+                    </div>
+                    
+                    <div>
+                        <input type="hidden" id="language" name="language" value="{{ user.language if user else '' }}">
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/selecionar-language')">
+                            <span class="btn-label">IDIOMA DA IA</span>
+                            <span id="language_display" class="btn-value">Selecione...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="btn-stack">
+                <button type="submit" class="btn btn-primary">{{ 'ATUALIZAR' if user else 'CADASTRAR' }}</button>
+                <a href="{{ url_for('lista_usuarios') if user else url_for('menu_usuarios') }}" class="btn btn-secondary">CANCELAR</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Limpa sessionStorage ao entrar na página (exceto se está voltando de uma tela de seleção)
+if (!sessionStorage.getItem('navigating_selection')) {
+    sessionStorage.clear();
+}
+sessionStorage.removeItem('navigating_selection');
+
+// Mapeamento de valores em inglês para português
+const translations = {
+    'short (objective)': 'CURTO (OBJETIVO)',
+    'neutral (balanced)': 'NEUTRO (BALANCEADO)',
+    'detailed (explanatory)': 'DETALHADO (EXPLICATIVO)',
+    'formal (business)': 'FORMAL (NEGOCIO)',
+    'casual (chatty)': 'CASUAL (CONVERSADOR)',
+    'male': 'MASCULINO',
+    'female': 'FEMININO',
+    'pt-BR': 'PT-BR',
+    'en-US': 'EN-US',
+    'es-ES': 'ES-ES'
+};
+
+// Restaura valores do sessionStorage
+window.addEventListener('DOMContentLoaded', function() {
+    // Verifica se há valores novos no sessionStorage
+    const responseStyle = sessionStorage.getItem('response_style');
+    const personaGender = sessionStorage.getItem('persona_gender');
+    const language = sessionStorage.getItem('language');
+    const rfid = sessionStorage.getItem('rfid');
+    const name = sessionStorage.getItem('name');
+    
+    // Limpa temporários antigos se não houver navegação ativa
+    const tempResponseStyle = sessionStorage.getItem('temp_response_style');
+    const tempPersonaGender = sessionStorage.getItem('temp_persona_gender');
+    const tempLanguage = sessionStorage.getItem('temp_language');
+    const tempRfid = sessionStorage.getItem('temp_rfid');
+    const tempName = sessionStorage.getItem('temp_name');
+    
+    // Se há um valor novo do sessionStorage (vindo de uma tela de seleção)
+    if (responseStyle) {
+        document.getElementById('response_style').value = responseStyle;
+        document.getElementById('response_style_display').textContent = translations[responseStyle] || responseStyle.toUpperCase();
+        sessionStorage.removeItem('response_style');
+    } else if (tempResponseStyle) {
+        // Restaura do temporário se existir
+        document.getElementById('response_style').value = tempResponseStyle;
+        document.getElementById('response_style_display').textContent = translations[tempResponseStyle] || tempResponseStyle.toUpperCase();
+    } else {
+        // Carrega valor inicial do usuário (modo edição)
+        const initialValue = document.getElementById('response_style').value;
+        if (initialValue) {
+            document.getElementById('response_style_display').textContent = translations[initialValue] || initialValue.toUpperCase();
+        }
+    }
+    
+    if (personaGender) {
+        document.getElementById('persona_gender').value = personaGender;
+        document.getElementById('persona_gender_display').textContent = translations[personaGender] || personaGender.toUpperCase();
+        sessionStorage.removeItem('persona_gender');
+    } else if (tempPersonaGender) {
+        document.getElementById('persona_gender').value = tempPersonaGender;
+        document.getElementById('persona_gender_display').textContent = translations[tempPersonaGender] || tempPersonaGender.toUpperCase();
+    } else {
+        // Carrega valor inicial do usuário (modo edição)
+        const initialValue = document.getElementById('persona_gender').value;
+        if (initialValue) {
+            document.getElementById('persona_gender_display').textContent = translations[initialValue] || initialValue.toUpperCase();
+        }
+    }
+    
+    if (language) {
+        document.getElementById('language').value = language;
+        document.getElementById('language_display').textContent = translations[language] || language.toUpperCase();
+        sessionStorage.removeItem('language');
+    } else if (tempLanguage) {
+        document.getElementById('language').value = tempLanguage;
+        document.getElementById('language_display').textContent = translations[tempLanguage] || tempLanguage.toUpperCase();
+    } else {
+        // Carrega valor inicial do usuário (modo edição)
+        const initialValue = document.getElementById('language').value;
+        if (initialValue) {
+            document.getElementById('language_display').textContent = translations[initialValue] || initialValue.toUpperCase();
+        }
+    }
+    
+    if (rfid) {
+        document.getElementById('rfid').value = rfid;
+        const displayBtn = document.getElementById('rfid_display');
+        if (displayBtn) {
+            displayBtn.textContent = rfid;
+        }
+        sessionStorage.removeItem('rfid');
+    } else if (tempRfid) {
+        document.getElementById('rfid').value = tempRfid;
+        const displayBtn = document.getElementById('rfid_display');
+        if (displayBtn) {
+            displayBtn.textContent = tempRfid;
+        }
+    }
+    
+    // Restaura o campo name
+    if (name) {
+        document.getElementById('name').value = name;
+        sessionStorage.removeItem('name');
+    } else if (tempName) {
+        document.getElementById('name').value = tempName;
+    }
+    
+    // Salva o estado atual no sessionStorage antes de navegar
+    document.querySelectorAll('.btn-selection-trigger').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            // Marca que está navegando para não limpar o storage
+            sessionStorage.setItem('navigating_selection', 'true');
+            
+            // 🔥 NOVO: Salvar contexto de edição
+            {% if user %}
+            sessionStorage.setItem('editing_mode', 'true');
+            sessionStorage.setItem('editing_user_id', '{{ user.id }}');
+            {% else %}
+            sessionStorage.setItem('editing_mode', 'false');
+            sessionStorage.removeItem('editing_user_id');
+            {% endif %}
+            
+            // Salva os valores atuais antes de navegar
+            sessionStorage.setItem('temp_response_style', document.getElementById('response_style').value);
+            sessionStorage.setItem('temp_persona_gender', document.getElementById('persona_gender').value);
+            sessionStorage.setItem('temp_language', document.getElementById('language').value);
+            const rfidValue = document.getElementById('rfid').value;
+            if (rfidValue) {
+                sessionStorage.setItem('temp_rfid', rfidValue);
+            }
+            // Salva o campo name também
+            const nameValue = document.getElementById('name').value;
+            if (nameValue) {
+                sessionStorage.setItem('temp_name', nameValue);
+            }
+        });
+    });
+});
+
+document.getElementById('userForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const data = {};
+    formData.forEach((value, key) => {
+        data[key] = value;
+    });
+    
+    fetch(this.action || window.location.href, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (result.success) {
+            // Limpa todo o sessionStorage para resetar o formulário na próxima entrada
+            sessionStorage.clear();
+            window.location.href = "{{ url_for('menu_usuarios') }}";
+        } else {
+            alert(result.message || 'Erro ao salvar usuario');
+        }
+    })
+    .catch(error => {
+        alert('Erro ao salvar usuario: ' + error);
+    });
+});
+</script>
+{% endblock %}
+// Limpa todo o sessionStorage para resetar o formulário na próxima entrada
+            sessionStorage.clear();
+            
