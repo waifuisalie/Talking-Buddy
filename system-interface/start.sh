@@ -147,6 +147,21 @@ if ! python3 -c "import pyaudio" 2>/dev/null; then
     echo -e "${GREEN}✓${NC} PyAudio instalado"
 fi
 
+# Verificar openWakeWord (necessário para detecção de wake word local)
+if ! python3 -c "import openwakeword" 2>/dev/null; then
+    echo "🔄 Instalando openWakeWord (sem tflite para compatibilidade aarch64)..."
+    pip install openwakeword --no-deps --quiet
+fi
+if ! python3 -c "import onnxruntime" 2>/dev/null; then
+    echo "🔄 Instalando onnxruntime..."
+    pip install "onnxruntime==1.20.1" --quiet
+fi
+if python3 -c "import openwakeword" 2>/dev/null; then
+    echo -e "${GREEN}✓${NC} openWakeWord disponível (wake word local)"
+else
+    echo -e "${YELLOW}⚠️  openWakeWord não disponível (wake word desabilitado)${NC}"
+fi
+
 # Verificar Supertonic TTS (opcional, mas recomendado)
 if python3 -c "import supertonic" 2>/dev/null; then
     SUPERTONIC_AVAILABLE=true
