@@ -12,10 +12,47 @@ Say "hey buddy" — scores above 0.5 count as a detection.
 import os
 import sys
 import ctypes
+import numpy as np
 
-# Suppress ALSA error spam before importing pyaudio.
-# IMPORTANT: keep _EH_CB at module level — if it gets garbage collected,
-# ALSA will call freed memory and segfault when the mic is probed.
+# Import pyaudio and enumerate devices BEFORE installing the ALSA error
+# suppressor — the ctypes hook interferes with PortAudio device probing.
+import pyaudio
+
+_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MODEL = os.path.join(_DIR, "models", "openwakeword", "hey_buddy.onnx")
+
+model_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
+threshold  = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
+
+if not os.path.exists(model_path):
+    print(f"Error: model not found: {model_path}")
+    print("  Run 'git pull' to get the model files, or pass the path as an argument.")
+    sys.exit(1)
+
+# Find a USB mic (or any input device that supports 16 kHz) before suppressing
+# ALSA errors, while PortAudio can still enumerate devices properly.
+CHUNK, RATE = 1280, 16000
+_p = pyaudio.PyAudio()
+input_index = None
+for i in range(_p.get_device_count()):
+    info = _p.get_device_info_by_index(i)
+    if info["maxInputChannels"] < 1:
+        continue
+    try:
+        if _p.is_format_supported(RATE, input_device=i, input_channels=1,
+                                   input_format=pyaudio.paInt16):
+            input_index = i
+            print(f"Using mic: [{i}] {info['name']}")
+            break
+    except ValueError:
+        continue
+_p.terminate()
+
+if input_index is None:
+    print("Error: no input device found that supports 16 kHz. Check your microphone.")
+    sys.exit(1)
+
+# NOW install ALSA error suppressor (keeps the module-level ref to avoid segfault).
 try:
     _asound = ctypes.cdll.LoadLibrary("libasound.so.2")
     _EH_TYPE = ctypes.CFUNCTYPE(
@@ -26,57 +63,18 @@ try:
 except Exception:
     pass
 
-import numpy as np
-import pyaudio
 from openwakeword.model import Model
 
-_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_MODEL = os.path.join(_DIR, "models", "openwakeword", "hey_buddy.onnx")
-
-model_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
-threshold = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
-
-if not os.path.exists(model_path):
-    print(f"Error: model not found: {model_path}")
-    print("  Run 'git pull' to get the model files, or pass the path as an argument.")
-    sys.exit(1)
-
 _MODEL_DIR = os.path.dirname(model_path)
-_MELSPEC = os.path.join(_MODEL_DIR, "melspectrogram.onnx")
-_EMBEDDING = os.path.join(_MODEL_DIR, "embedding_model.onnx")
-
 print(f"Loading model: {model_path}")
 oww = Model(
     wakeword_models=[model_path],
     inference_framework="onnx",
-    melspec_model_path=_MELSPEC,
-    embedding_model_path=_EMBEDDING,
+    melspec_model_path=os.path.join(_MODEL_DIR, "melspectrogram.onnx"),
+    embedding_model_path=os.path.join(_MODEL_DIR, "embedding_model.onnx"),
 )
 
-CHUNK, RATE = 1280, 16000
-
 p = pyaudio.PyAudio()
-
-# Find the first input device that actually supports 16 kHz
-input_index = None
-for i in range(p.get_device_count()):
-    info = p.get_device_info_by_index(i)
-    if info["maxInputChannels"] < 1:
-        continue
-    try:
-        if p.is_format_supported(RATE, input_device=i, input_channels=1,
-                                  input_format=pyaudio.paInt16):
-            input_index = i
-            print(f"Using mic: [{i}] {info['name']}")
-            break
-    except ValueError:
-        continue
-
-if input_index is None:
-    print("Error: no input device found that supports 16 kHz. Check your microphone.")
-    p.terminate()
-    sys.exit(1)
-
 stream = p.open(
     format=pyaudio.paInt16,
     channels=1,
