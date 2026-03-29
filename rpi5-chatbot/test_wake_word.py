@@ -13,13 +13,16 @@ import os
 import sys
 import ctypes
 
-# Suppress ALSA error spam before importing pyaudio
+# Suppress ALSA error spam before importing pyaudio.
+# IMPORTANT: keep _EH_CB at module level — if it gets garbage collected,
+# ALSA will call freed memory and segfault when the mic is probed.
 try:
     _asound = ctypes.cdll.LoadLibrary("libasound.so.2")
-    _EH = ctypes.CFUNCTYPE(
+    _EH_TYPE = ctypes.CFUNCTYPE(
         None, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p
     )
-    _asound.snd_lib_error_set_handler(_EH(lambda *a: None))
+    _EH_CB = _EH_TYPE(lambda *a: None)  # module-level ref keeps it alive
+    _asound.snd_lib_error_set_handler(_EH_CB)
 except Exception:
     pass
 
