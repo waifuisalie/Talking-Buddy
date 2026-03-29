@@ -627,6 +627,14 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     fi
 done
 
+# Verify openWakeWord installed correctly (model files are in the repo, no download needed)
+echo "🔄 Verifying openWakeWord..."
+if python -c "from openwakeword.model import Model; print('openWakeWord OK')" 2>/dev/null; then
+    echo "✅ openWakeWord ready"
+else
+    echo "⚠️  openWakeWord import failed — check pip install output above"
+fi
+
 # Install Supertonic 2 TTS (multilingual, 9x faster than Piper)
 echo "🔄 Checking Supertonic 2 TTS..."
 

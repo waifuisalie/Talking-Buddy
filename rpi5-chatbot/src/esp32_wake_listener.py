@@ -13,9 +13,10 @@ from enum import Enum
 
 class WakeListenerMode(Enum):
     """Operating modes for wake listener"""
-    SERIAL = "serial"      # Real ESP32 via serial port
-    KEYBOARD = "keyboard"  # Keyboard simulation for testing
-    DISABLED = "disabled"  # No wake word (always active)
+    SERIAL = "serial"           # Real ESP32 via serial port
+    KEYBOARD = "keyboard"       # Keyboard simulation for testing
+    DISABLED = "disabled"       # No wake word (always active)
+    OPENWAKEWORD = "openwakeword"  # On-device ML via openWakeWord
 
 class ESP32WakeListener:
     """Listens for wake word signals from ESP32-S3"""
@@ -199,6 +200,14 @@ class ESP32WakeListener:
                 self._wake_callback()
             except Exception as e:
                 print(f"❌ Error in wake callback: {e}")
+
+    def pause(self):
+        """No-op: ESP32 owns its own mic, no sharing needed."""
+        pass
+
+    def resume(self):
+        """No-op: ESP32 owns its own mic, no sharing needed."""
+        pass
 
     def send_sleep_signal(self):
         """
