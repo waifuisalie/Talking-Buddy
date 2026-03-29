@@ -149,12 +149,10 @@ fi
 
 # Verificar openWakeWord (necessário para detecção de wake word local)
 if ! python3 -c "import openwakeword" 2>/dev/null; then
-    echo "🔄 Instalando openWakeWord (sem tflite para compatibilidade aarch64)..."
+    echo "🔄 Instalando openWakeWord e dependências (sem tflite para aarch64)..."
+    # Instala dependências manualmente (tflite-runtime não tem wheel aarch64)
+    pip install "onnxruntime==1.20.1" tqdm scipy scikit-learn --quiet
     pip install openwakeword --no-deps --quiet
-fi
-if ! python3 -c "import onnxruntime" 2>/dev/null; then
-    echo "🔄 Instalando onnxruntime..."
-    pip install "onnxruntime==1.20.1" --quiet
 fi
 if python3 -c "import openwakeword" 2>/dev/null; then
     echo -e "${GREEN}✓${NC} openWakeWord disponível (wake word local)"
