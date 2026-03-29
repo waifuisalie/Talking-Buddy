@@ -31,9 +31,6 @@ import pyaudio
 from openwakeword.model import Model
 
 _DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_DIR, "src"))
-from audio_device_detector import AudioDeviceDetector
-
 DEFAULT_MODEL = os.path.join(_DIR, "models", "openwakeword", "hey_buddy.onnx")
 
 model_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
@@ -58,13 +55,28 @@ oww = Model(
 
 CHUNK, RATE = 1280, 16000
 
-detector = AudioDeviceDetector()
-input_device = detector.detect_input_device()
-input_index = input_device.index if input_device else None
-if input_device:
-    print(f"Using mic: [{input_index}] {input_device.name}")
-
 p = pyaudio.PyAudio()
+
+# Find the first input device that actually supports 16 kHz
+input_index = None
+for i in range(p.get_device_count()):
+    info = p.get_device_info_by_index(i)
+    if info["maxInputChannels"] < 1:
+        continue
+    try:
+        if p.is_format_supported(RATE, input_device=i, input_channels=1,
+                                  input_format=pyaudio.paInt16):
+            input_index = i
+            print(f"Using mic: [{i}] {info['name']}")
+            break
+    except ValueError:
+        continue
+
+if input_index is None:
+    print("Error: no input device found that supports 16 kHz. Check your microphone.")
+    p.terminate()
+    sys.exit(1)
+
 stream = p.open(
     format=pyaudio.paInt16,
     channels=1,

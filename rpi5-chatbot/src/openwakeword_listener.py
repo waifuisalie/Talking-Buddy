@@ -162,14 +162,33 @@ class OpenWakeWordListener:
         p = pyaudio.PyAudio()
         stream = None
 
+        def find_input_device():
+            if self.input_device_index is not None:
+                return self.input_device_index
+            for i in range(p.get_device_count()):
+                info = p.get_device_info_by_index(i)
+                if info["maxInputChannels"] < 1:
+                    continue
+                try:
+                    if p.is_format_supported(self.RATE, input_device=i,
+                                              input_channels=1,
+                                              input_format=self.FORMAT):
+                        return i
+                except ValueError:
+                    continue
+            return None
+
         def open_stream():
+            idx = find_input_device()
+            if idx is None:
+                raise RuntimeError("No input device found that supports 16 kHz")
             return p.open(
                 format=self.FORMAT,
                 channels=self.CHANNELS,
                 rate=self.RATE,
                 input=True,
                 frames_per_buffer=self.CHUNK,
-                input_device_index=self.input_device_index,
+                input_device_index=idx,
             )
 
         def close_stream(s):
