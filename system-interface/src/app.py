@@ -45,13 +45,19 @@ except ImportError as e:
     VOICE_ENABLED = False
     print(f"⚠️  Módulo de voz desabilitado: {e}")
 
-# Importa gerenciador de wake word ESP32
+# Importa gerenciador de wake word (openWakeWord por padrão, ESP32 como fallback)
+try:
+    from openwakeword_manager import OpenWakeWordManager
+    OWW_AVAILABLE = True
+except ImportError as e:
+    OWW_AVAILABLE = False
+    print(f"⚠️  OpenWakeWordManager não disponível: {e}")
+
 try:
     from esp32_manager import ESP32Manager
     ESP32_AVAILABLE = True
 except ImportError as e:
     ESP32_AVAILABLE = False
-    print(f"⚠️  ESP32Manager não disponível: {e}")
 
 WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
 DEBUG_LOGS = os.getenv('DEBUG_LOGS', 'false').lower() == 'true'
@@ -407,52 +413,42 @@ if VOICE_ENABLED:
         print("   Sistema funcionará apenas com texto")
 
 
-# ========== WAKE WORD INITIALIZATION (ESP32) ==========
+# ========== WAKE WORD INITIALIZATION (openWakeWord) ==========
 
 _is_main_process = (os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or
                      os.environ.get('WERKZEUG_RUN_MAIN') is None)
 if _is_main_process:
-    if WAKE_WORD_ENABLED and ESP32_AVAILABLE:
+    if WAKE_WORD_ENABLED and OWW_AVAILABLE:
         try:
             print("\n" + "=" * 70)
-            print("INICIALIZANDO ESP32 WAKE WORD DETECTION")
+            print("INICIALIZANDO OPENWAKEWORD DETECTION")
             print("=" * 70)
-            
-            # Configurações do .env
-            esp32_baud = int(os.getenv('ESP32_BAUD_RATE', '115200'))
-            esp32_reconnect = int(os.getenv('ESP32_RECONNECT_INTERVAL', '5'))
-            esp32_debounce = float(os.getenv('WAKE_WORD_DEBOUNCE_TIME', '2.0'))
-            
-            # Callback quando wake word detectado
+
+            debounce = float(os.getenv('WAKE_WORD_DEBOUNCE_TIME', '2.0'))
+
             def on_wake_word():
-                print("🔔 [CALLBACK] Wake word detectado no ESP32!")
-            
-            # Criar instância do ESP32Manager
-            wake_word_manager = ESP32Manager(
-                baud_rate=esp32_baud,
-                reconnect_interval=esp32_reconnect,
-                debounce_time=esp32_debounce
-            )
-            
+                print("🔔 [CALLBACK] Wake word detectado!")
+
+            wake_word_manager = OpenWakeWordManager(debounce_time=debounce)
             wake_word_manager.register_wake_callback(on_wake_word)
             wake_word_manager.start()
-            
-            print("✅ ESP32 Wake Word Manager ativado")
+
+            print("✅ OpenWakeWord Manager ativado")
             print("=" * 70)
             print()
-            
+
         except Exception as e:
-            print(f"⚠️  Erro ao inicializar ESP32: {e}")
+            print(f"⚠️  Erro ao inicializar OpenWakeWord: {e}")
             print("   Sistema funcionará sem wake word detection")
             wake_word_manager = None
-    
+
     elif not WAKE_WORD_ENABLED:
         print("\nℹ️  Wake Word desabilitado (.env: WAKE_WORD_ENABLED=false)")
         wake_word_manager = None
-    
+
     else:
-        print(f"\n⚠️  ESP32 não disponível")
-        print(f"   Instale pyserial: pip install pyserial")
+        print(f"\n⚠️  OpenWakeWord não disponível")
+        print(f"   Execute: pip install openwakeword onnxruntime")
         wake_word_manager = None
 
 else:
@@ -1520,8 +1516,15 @@ def api_voice_record_and_transcribe():
         temp_path = temp_file.name
         temp_file.close()
 
-        print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
-        speech_captured = whisper_stt.record_utterance_to_file(temp_path, max_duration=max_duration)
+        # Libera o mic para o Whisper (openWakeWord usa o mesmo dispositivo)
+        if wake_word_manager and hasattr(wake_word_manager, 'pause'):
+            wake_word_manager.pause()
+        try:
+            print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
+            speech_captured = whisper_stt.record_utterance_to_file(temp_path, max_duration=max_duration)
+        finally:
+            if wake_word_manager and hasattr(wake_word_manager, 'resume'):
+                wake_word_manager.resume()
 
         if not speech_captured:
             try:
@@ -1629,7 +1632,7 @@ def api_wake_word_status():
         'wake_detected': wake_detected,
         'timestamp': datetime.now().isoformat(),
         'connected': connected,
-        'mode': 'esp32'
+        'mode': 'openwakeword'
     })
 
 
