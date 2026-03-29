@@ -1,21 +1,21 @@
 """
-Speech-to-Text module using faster-whisper - RPI5 Edition
+Speech-to-Text module using whisper.cpp CLI - RPI5 Edition
 
 This implementation:
-1. Loads the Whisper model once into RAM at startup (persistent)
-2. Records audio while user speaks using ALSA device names
-3. Detects silence to know when user finished
-4. Saves audio to temp WAV file
-5. Transcribes using faster-whisper Python API (language per request)
-6. Returns clean transcription text
+1. Records audio while user speaks using ALSA device names
+2. Detects silence to know when user finished
+3. Saves audio to temp WAV file
+4. Runs whisper-cli subprocess on the file (-t 4 -ac 512 for fast ARM inference)
+5. Returns clean transcription text
 
 RPI5 MODIFICATIONS:
 - Uses ALSA device name (plughw:CARD=Device,DEV=0) instead of card index
 - Auto-detects PyAudio device index from ALSA name for stability
-- faster-whisper replaces subprocess whisper-cli: model stays in RAM, ~1-3s latency
+- Uses -ac 512 to cap audio context window for faster Cortex-A76 inference
 """
 
 import queue
+import subprocess
 import wave
 import tempfile
 import time
@@ -82,6 +82,7 @@ class WhisperSTT:
         self.silence_duration_limit = self.config.silence_duration
         self.min_audio_length = self.config.min_audio_length
         self.debug_mode = self.config.debug_mode
+        self._audio_lock = threading.Lock()  # mutual exclusion: calibration vs recording
 
         # Recording buffers
         self.audio_frames = []
@@ -90,9 +91,6 @@ class WhisperSTT:
         # Debug monitoring
         self.last_debug_time = 0
         self.debug_interval = 2.0  # Print RMS every 2 seconds in debug mode
-
-        # faster-whisper model (loaded once at start(), released at stop())
-        self._fw_model = None
 
         # Threading
         self.recording_thread = None
@@ -247,11 +245,7 @@ class WhisperSTT:
             self._processing_thread = threading.Thread(target=self._processing_worker, daemon=True, name="WhisperProcessing")
             self._processing_thread.start()
 
-            # Load faster-whisper model into RAM (once, stays loaded until stop())
-            if not self._load_fw_model():
-                return False
-
-            print("🎤 Whisper STT (faster-whisper) started successfully!")
+            print("🎤 Whisper STT (CLI mode) started successfully!")
             return True
 
         except Exception as e:
@@ -297,9 +291,6 @@ class WhisperSTT:
         if self.audio:
             self.audio.terminate()
             self.audio = None
-
-        # Release faster-whisper model from RAM
-        self._fw_model = None
 
         print("🛑 Whisper STT stopped")
 
@@ -494,6 +485,11 @@ class WhisperSTT:
             print("❌ PyAudio not available")
             return False
 
+        # Acquire lock — waits if calibration is running (max 3s; calibration is at most 2s)
+        if not self._audio_lock.acquire(blocking=True, timeout=3.0):
+            print("⚠️  [VAD] Could not acquire audio lock")
+            return False
+
         audio = None
         stream = None
         try:
@@ -643,6 +639,112 @@ class WhisperSTT:
                     audio.terminate()
                 except Exception:
                     pass
+            self._audio_lock.release()
+
+    def calibrate_vad(self, duration: float = 2.0) -> Optional[float]:
+        """Sample ambient noise and update silence_threshold adaptively.
+
+        Algorithm:
+          1. Sample `duration` seconds of audio (opens own stream, non-blocking lock)
+          2. Compute RMS per chunk
+          3. Reject outliers above median*3 (removes speech contamination)
+          4. new_threshold = max(20, int(mean + 2*std))
+          5. Update self.silence_threshold in place
+
+        Returns the new threshold, or None if mic was busy (skipped).
+        """
+        if not pyaudio:
+            return None
+
+        if not self._audio_lock.acquire(blocking=False):
+            print("🔧 [VAD] Calibration skipped — mic busy")
+            return None
+
+        audio = None
+        stream = None
+        try:
+            with _suppress_audio_init_noise():
+                audio = pyaudio.PyAudio()
+
+            device_index = None
+            if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                device_index = self._find_device_index_by_name_with_audio(
+                    audio, self.config.capture_device_name)
+            if device_index is None and self.config.capture_device >= 0:
+                device_index = self.config.capture_device
+
+            sample_rate = self.config.sample_rate
+            chunk_size = self.config.chunk_size
+
+            # Fall back to device native rate if configured rate isn't supported
+            if device_index is not None:
+                try:
+                    audio.is_format_supported(sample_rate, input_device=device_index,
+                                              input_channels=1, input_format=pyaudio.paInt16)
+                except ValueError:
+                    sample_rate = int(audio.get_device_info_by_index(device_index)['defaultSampleRate'])
+                    print(f"⚠️  [VAD] Device doesn't support {self.config.sample_rate} Hz, using {sample_rate} Hz")
+
+            stream_kwargs = {
+                'format': pyaudio.paInt16, 'channels': 1,
+                'rate': sample_rate, 'input': True,
+                'frames_per_buffer': chunk_size,
+            }
+            if device_index is not None:
+                stream_kwargs['input_device_index'] = device_index
+
+            stream = audio.open(**stream_kwargs)
+
+            n_chunks = int(duration * sample_rate / chunk_size)
+            rms_values = []
+            for _ in range(n_chunks):
+                data = stream.read(chunk_size, exception_on_overflow=False)
+                arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                rms_sq = np.mean(arr ** 2)
+                if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                    rms_values.append(np.sqrt(rms_sq))
+
+            stream.stop_stream()
+            stream.close()
+            stream = None
+            audio.terminate()
+            audio = None
+
+            if len(rms_values) < 3:
+                print("⚠️  [VAD] Not enough samples for calibration")
+                return None
+
+            rms_arr = np.array(rms_values)
+            median = float(np.median(rms_arr))
+            clean = rms_arr[rms_arr <= median * 3]
+            if len(clean) < 3:
+                clean = rms_arr
+
+            mean = float(np.mean(clean))
+            std = float(np.std(clean))
+            new_threshold = max(20, int(mean + 2 * std))
+
+            old = self.silence_threshold
+            self.silence_threshold = new_threshold
+            print(f"🎚️  [VAD] Calibrated: ambient={mean:.1f} ±{std:.1f} → threshold {old} → {new_threshold}")
+            return float(new_threshold)
+
+        except Exception as e:
+            print(f"❌ [VAD] Calibration error: {e}")
+            return None
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            self._audio_lock.release()
 
     def _find_device_index_by_name_with_audio(self, audio, device_name: str) -> Optional[int]:
         """Same as _find_device_index_by_name but uses a provided PyAudio instance."""
@@ -664,45 +766,43 @@ class WhisperSTT:
         except Exception:
             return None
 
-    def _load_fw_model(self):
-        """Load faster-whisper model into RAM (idempotent — safe to call multiple times)"""
-        if self._fw_model is not None:
-            return True
-        try:
-            from faster_whisper import WhisperModel
-            model_name = getattr(self.config, 'faster_whisper_model', 'base')
-            print(f"⏳ [STT] Loading faster-whisper model '{model_name}'...")
-            self._fw_model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            print("✅ [STT] faster-whisper model loaded and ready")
-            return True
-        except ImportError:
-            print("❌ faster-whisper not installed. Run: pip install faster-whisper")
-            return False
-        except Exception as e:
-            print(f"❌ [STT] Failed to load faster-whisper model: {e}")
-            return False
-
     def _transcribe_audio_file(self, audio_path: str) -> Optional[str]:
-        """Transcribe audio file using faster-whisper (lazy-loads model on first call)"""
-        if not self._load_fw_model():
-            return None
-
+        """Transcribe audio file using whisper CLI"""
         try:
-            # Pass language directly; None triggers auto-detection
-            lang = self.config.language if self.config.language not in ("auto", "") else None
+            cmd = [
+                self.config.cli_binary,
+                "-m", self.config.model_path,
+                "-l", self.config.language,
+                "-t", str(self.config.threads),
+                "--no-timestamps",
+                "-otxt",
+                "-f", audio_path
+            ]
+            if hasattr(self.config, 'audio_ctx') and self.config.audio_ctx:
+                cmd.extend(["-ac", str(self.config.audio_ctx)])
 
-            segments, _info = self._fw_model.transcribe(
-                audio_path,
-                language=lang,
-                beam_size=1,
-                condition_on_previous_text=False,
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
-            text = " ".join(segment.text for segment in segments).strip()
-            return self._clean_transcription(text) if text else None
+            if result.returncode == 0:
+                output_file = audio_path + ".txt"
+                if Path(output_file).exists():
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        text = f.read().strip()
+                    Path(output_file).unlink(missing_ok=True)
+                    return self._clean_transcription(text)
+                else:
+                    text = result.stdout.strip()
+                    if text:
+                        return self._clean_transcription(text)
+            else:
+                print(f"❌ Whisper error: {result.stderr}")
+                return None
 
+        except subprocess.TimeoutExpired:
+            print("❌ Whisper transcription timed out")
+            return None
         except Exception as e:
-            print(f"❌ Error running faster-whisper: {e}")
+            print(f"❌ Error running whisper: {e}")
             return None
 
     def _clean_transcription(self, text: str) -> str:
@@ -727,13 +827,15 @@ class WhisperSTT:
         return text.strip()
 
     def is_available(self) -> bool:
-        """Check if faster-whisper is installed and model is loaded"""
+        """Check if whisper CLI binary and model file exist"""
         try:
-            import faster_whisper  # noqa: F401
+            if not Path(self.config.cli_binary).exists():
+                print(f"❌ Whisper binary not found: {self.config.cli_binary}")
+                return False
+            if not Path(self.config.model_path).exists():
+                print(f"❌ Whisper model not found: {self.config.model_path}")
+                return False
             return True
-        except ImportError:
-            print("❌ faster-whisper not installed. Run: pip install faster-whisper")
-            return False
         except Exception as e:
             print(f"❌ Error checking availability: {e}")
             return False

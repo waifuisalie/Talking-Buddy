@@ -213,91 +213,51 @@ fi
 echo ""
 echo -e "${YELLOW}[6/8]${NC} Aquecendo modelos de IA..."
 
-# Aquecimento do faster-whisper: carrega o modelo e roda uma inferência real
-# para preencher CPU caches (L2/L3), buffers CTranslate2 e rotinas BLAS.
-# Sem isso, a primeira transcrição do usuário demora ~17s em vez de ~5s.
-if python3 -c "import faster_whisper" 2>/dev/null; then
-    echo "🔄 Aquecendo faster-whisper (primeira inferência)..."
-
-    # Tentar gerar áudio de voz real com espeak (força o modelo a processar fala verdadeira,
-    # não apenas silêncio que seria filtrado pelo VAD e não aqueceria os caches do modelo).
-    WARMUP_WAV=$(mktemp /tmp/warmup_XXXXXX.wav)
-    USED_SPEECH=false
-    if command -v espeak &>/dev/null; then
-        espeak -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
-               --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
-        [ "$USED_SPEECH" = true ] && echo "   Áudio de aquecimento gerado com espeak" \
-                                  || echo "   espeak encontrado mas falhou, usando silêncio"
-    fi
-    if [ "$USED_SPEECH" = false ] && command -v espeak-ng &>/dev/null; then
-        espeak-ng -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
-                  --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
-        [ "$USED_SPEECH" = true ] && echo "   Áudio de aquecimento gerado com espeak-ng" \
-                                  || echo "   espeak-ng encontrado mas falhou, usando silêncio"
-    fi
-    [ "$USED_SPEECH" = false ] && echo "   espeak não disponível — usando áudio silencioso como fallback"
-
-    WARMUP_START=$SECONDS
-    WARMUP_RESULT=$(python3 - "$WARMUP_WAV" "$USED_SPEECH" <<'PYEOF'
-import wave, struct, os, sys, time
-
-warmup_wav = sys.argv[1]
-used_speech = sys.argv[2] == 'true'
-
-# Se espeak não gerou áudio real, criar WAV silencioso como fallback.
-# Usar vad_filter=False para garantir que o modelo execute mesmo sem voz.
-if not used_speech or os.path.getsize(warmup_wav) < 1000:
-    sample_rate, duration = 16000, 2
-    num_samples = sample_rate * duration
-    with wave.open(warmup_wav, 'w') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(struct.pack('<' + 'h' * num_samples, *([0] * num_samples)))
-    used_speech = False
-
-try:
-    from faster_whisper import WhisperModel
-    model_name = os.environ.get('FASTER_WHISPER_MODEL', 'base')
-    src = 'voz espeak' if used_speech else 'silêncio (espeak indisponível)'
-    t0 = time.time()
-    model = WhisperModel(model_name, device='cpu', compute_type='int8')
-    t_load = time.time() - t0
-    t1 = time.time()
-    # vad_filter=True funciona com áudio real; False garante execução com silêncio.
-    segs, info = model.transcribe(warmup_wav, language='pt', beam_size=1, condition_on_previous_text=False,
-                                   vad_filter=used_speech)
-    text = ' '.join(s.text for s in segs).strip()
-    t_infer = time.time() - t1
-    result = f'OK|{src}|{t_load:.1f}s load|{t_infer:.1f}s infer'
-    if text:
-        result += f'|transcrito: "{text[:60]}"'
-    print(result)
-except Exception as e:
-    print(f'FAIL|{e}')
-finally:
-    if os.path.exists(warmup_wav):
-        os.unlink(warmup_wav)
-PYEOF
-    )
-    WARMUP_SECS=$(( SECONDS - WARMUP_START ))
-
-    if echo "$WARMUP_RESULT" | grep -q "^OK|"; then
-        SRC=$(echo "$WARMUP_RESULT" | cut -d'|' -f2)
-        TLOAD=$(echo "$WARMUP_RESULT" | cut -d'|' -f3)
-        TINFER=$(echo "$WARMUP_RESULT" | cut -d'|' -f4)
-        TTEXT=$(echo "$WARMUP_RESULT" | cut -d'|' -f5)
-        echo -e "${GREEN}✓${NC} faster-whisper aquecido em ${WARMUP_SECS}s"
-        echo -e "   Fonte: ${SRC} | ${TLOAD} | ${TINFER}"
-        [ -n "$TTEXT" ] && echo -e "   ${TTEXT}"
-    else
-        ERR=$(echo "$WARMUP_RESULT" | cut -d'|' -f2-)
-        echo -e "${RED}❌ Falha no aquecimento do faster-whisper: ${ERR}${NC}"
-        echo -e "${YELLOW}   (primeira transcrição do usuário pode ser mais lenta)${NC}"
-    fi
-else
-    echo -e "${YELLOW}⚠️  faster-whisper não instalado, pulando aquecimento${NC}"
-fi
+# [DEAD CODE] faster-whisper warmup — moved back to whisper.cpp CLI (better ARM NEON
+# performance on RPi5 Cortex-A76). Kept for reference in case faster-whisper is revisited.
+#
+# if python3 -c "import faster_whisper" 2>/dev/null; then
+#     echo "🔄 Aquecendo faster-whisper (primeira inferência)..."
+#     WARMUP_WAV=$(mktemp /tmp/warmup_XXXXXX.wav)
+#     USED_SPEECH=false
+#     if command -v espeak &>/dev/null; then
+#         espeak -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
+#                --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
+#     fi
+#     if [ "$USED_SPEECH" = false ] && command -v espeak-ng &>/dev/null; then
+#         espeak-ng -v pt-br -s 140 "Olá, tudo bem? Como posso ajudar você hoje?" \
+#                   --stdout 2>/dev/null > "$WARMUP_WAV" && USED_SPEECH=true
+#     fi
+#     WARMUP_START=$SECONDS
+#     WARMUP_RESULT=$(python3 - "$WARMUP_WAV" "$USED_SPEECH" <<'PYEOF'
+# import wave, struct, os, sys, time
+# warmup_wav = sys.argv[1]
+# used_speech = sys.argv[2] == 'true'
+# if not used_speech or os.path.getsize(warmup_wav) < 1000:
+#     sample_rate, duration = 16000, 2
+#     num_samples = sample_rate * duration
+#     with wave.open(warmup_wav, 'w') as wf:
+#         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(sample_rate)
+#         wf.writeframes(struct.pack('<' + 'h' * num_samples, *([0] * num_samples)))
+#     used_speech = False
+# try:
+#     from faster_whisper import WhisperModel
+#     model = WhisperModel(os.environ.get('FASTER_WHISPER_MODEL', 'base'), device='cpu', compute_type='int8')
+#     segs, info = model.transcribe(warmup_wav, language='pt', beam_size=1, condition_on_previous_text=False,
+#                                    vad_filter=used_speech)
+#     text = ' '.join(s.text for s in segs).strip()
+#     print(f'OK|{time.time()}|transcrito: "{text[:60]}"')
+# except Exception as e:
+#     print(f'FAIL|{e}')
+# finally:
+#     os.path.exists(warmup_wav) and os.unlink(warmup_wav)
+# PYEOF
+#     )
+#     echo -e "${GREEN}✓${NC} faster-whisper aquecido"
+# else
+#     echo -e "${YELLOW}⚠️  faster-whisper não instalado, pulando aquecimento${NC}"
+# fi
+echo -e "${GREEN}✓${NC} STT: usando whisper-cli (sem aquecimento necessário)"
 
 # ============================================================================
 # 7. PRÉ-CARREGAR SUPERTONIC TTS
@@ -353,6 +313,79 @@ PYEOF
     fi
 else
     echo -e "${YELLOW}⚠️  Supertonic não instalado, pulando aquecimento${NC}"
+fi
+
+# ============================================================================
+# 6b. CALIBRAR VAD (medir ruído ambiente)
+# ============================================================================
+echo ""
+echo -e "${YELLOW}[6b]${NC} Calibrando VAD para o ambiente atual..."
+
+VAD_CALIBRATION=$(python3 - <<'PYEOF'
+import os
+try:
+    import pyaudio, numpy as np
+
+    DURATION = 2.0
+    SAMPLE_RATE = 16000
+    CHUNK_SIZE = 1024
+
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fd = os.dup(2)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+    try:
+        p = pyaudio.PyAudio()
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(saved_fd)
+
+    # Fall back to device native rate if 16000 Hz isn't supported
+    try:
+        p.is_format_supported(SAMPLE_RATE, input_device=None,
+                              input_channels=1, input_format=pyaudio.paInt16)
+    except ValueError:
+        SAMPLE_RATE = int(p.get_default_input_device_info()['defaultSampleRate'])
+
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+                    input=True, frames_per_buffer=CHUNK_SIZE)
+
+    n_chunks = int(DURATION * SAMPLE_RATE / CHUNK_SIZE)
+    rms_values = []
+    for _ in range(n_chunks):
+        data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+        arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+        rms_sq = np.mean(arr ** 2)
+        if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+            rms_values.append(np.sqrt(rms_sq))
+
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+    rms_arr = np.array(rms_values)
+    median = float(np.median(rms_arr))
+    clean = rms_arr[rms_arr <= median * 3]
+    if len(clean) < 3:
+        clean = rms_arr
+    mean = float(np.mean(clean))
+    std = float(np.std(clean))
+    threshold = max(20, int(mean + 2 * std))
+    print(f"OK|{threshold}|{mean:.1f}|{std:.1f}")
+except Exception as e:
+    print(f"FAIL|{e}")
+PYEOF
+)
+
+if echo "$VAD_CALIBRATION" | grep -q "^OK|"; then
+    VAD_THRESHOLD=$(echo "$VAD_CALIBRATION" | cut -d'|' -f2)
+    VAD_MEAN=$(echo "$VAD_CALIBRATION" | cut -d'|' -f3)
+    VAD_STD=$(echo "$VAD_CALIBRATION" | cut -d'|' -f4)
+    export VAD_THRESHOLD
+    echo -e "${GREEN}✓${NC} VAD calibrado: ambient=${VAD_MEAN} ±${VAD_STD} → threshold=${VAD_THRESHOLD}"
+else
+    ERR=$(echo "$VAD_CALIBRATION" | cut -d'|' -f2-)
+    echo -e "${YELLOW}⚠️  Calibração VAD falhou: ${ERR} (usando padrão=30)${NC}"
 fi
 
 # ============================================================================
