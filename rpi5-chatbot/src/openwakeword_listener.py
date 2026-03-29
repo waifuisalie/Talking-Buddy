@@ -164,31 +164,24 @@ class OpenWakeWordListener:
 
         def find_input_device():
             if self.input_device_index is not None:
-                return self.input_device_index
+                return self.input_device_index, int(p.get_device_info_by_index(
+                    self.input_device_index)["defaultSampleRate"])
             for i in range(p.get_device_count()):
                 info = p.get_device_info_by_index(i)
-                if info["maxInputChannels"] < 1:
-                    continue
-                try:
-                    if p.is_format_supported(self.RATE, input_device=i,
-                                              input_channels=1,
-                                              input_format=self.FORMAT):
-                        return i
-                except ValueError:
-                    continue
-            return None
+                if info["maxInputChannels"] > 0:
+                    return i, int(info["defaultSampleRate"])
+            return None, self.RATE
 
-        def open_stream():
-            idx = find_input_device()
-            if idx is None:
-                raise RuntimeError("No input device found that supports 16 kHz")
+        def open_stream(device_idx, device_rate, native_chunk):
+            if device_idx is None:
+                raise RuntimeError("No input device found")
             return p.open(
                 format=self.FORMAT,
                 channels=self.CHANNELS,
-                rate=self.RATE,
+                rate=device_rate,
                 input=True,
-                frames_per_buffer=self.CHUNK,
-                input_device_index=idx,
+                frames_per_buffer=native_chunk,
+                input_device_index=device_idx,
             )
 
         def close_stream(s):
@@ -199,8 +192,12 @@ class OpenWakeWordListener:
                 pass
 
         try:
-            stream = open_stream()
-            print("OpenWakeWord: listening for wake word...")
+            device_idx, device_rate = find_input_device()
+            native_chunk = int(self.CHUNK * device_rate / self.RATE)
+            needs_resample = device_rate != self.RATE
+            stream = open_stream(device_idx, device_rate, native_chunk)
+            print(f"OpenWakeWord: listening for wake word... (mic @ {device_rate} Hz"
+                  + (f", resampling to {self.RATE} Hz)" if needs_resample else ")"))
 
             while self._is_running:
                 # --- Pause handling: release mic so whisper can use it ---
@@ -217,7 +214,7 @@ class OpenWakeWordListener:
                     # Reopen the stream after whisper releases the mic
                     self._stream_released.clear()
                     try:
-                        stream = open_stream()
+                        stream = open_stream(device_idx, device_rate, native_chunk)
                         if self._oww:
                             self._oww.reset()  # clear stale audio state
                     except Exception as e:
@@ -227,13 +224,22 @@ class OpenWakeWordListener:
 
                 # --- Normal inference path ---
                 try:
-                    audio_data = stream.read(self.CHUNK, exception_on_overflow=False)
+                    audio_data = stream.read(native_chunk, exception_on_overflow=False)
                 except OSError as e:
                     print(f"OpenWakeWord: mic read error: {e}")
                     time.sleep(0.01)
                     continue
 
-                audio_np = np.frombuffer(audio_data, dtype=np.int16)
+                raw = np.frombuffer(audio_data, dtype=np.int16)
+                if needs_resample:
+                    audio_np = np.interp(
+                        np.linspace(0, len(raw) - 1, self.CHUNK),
+                        np.arange(len(raw)),
+                        raw
+                    ).astype(np.int16)
+                else:
+                    audio_np = raw
+
                 try:
                     prediction = self._oww.predict(audio_np)
                 except Exception:
