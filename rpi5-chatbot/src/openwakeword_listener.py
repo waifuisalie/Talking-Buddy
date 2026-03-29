@@ -76,9 +76,13 @@ class OpenWakeWordListener:
 
         try:
             from openwakeword.model import Model
+            import os as _os
+            _model_dir = _os.path.dirname(_os.path.abspath(self.model_path))
             self._oww = Model(
                 wakeword_models=[self.model_path],
-                inference_framework="onnx"
+                inference_framework="onnx",
+                melspec_model_path=_os.path.join(_model_dir, "melspectrogram.onnx"),
+                embedding_model_path=_os.path.join(_model_dir, "embedding_model.onnx"),
             )
         except Exception as e:
             print(f"Failed to load openWakeWord model from {self.model_path}: {e}")

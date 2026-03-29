@@ -38,8 +38,17 @@ if not os.path.exists(model_path):
     print("  Run 'git pull' to get the model files, or pass the path as an argument.")
     sys.exit(1)
 
+_MODEL_DIR = os.path.dirname(model_path)
+_MELSPEC = os.path.join(_MODEL_DIR, "melspectrogram.onnx")
+_EMBEDDING = os.path.join(_MODEL_DIR, "embedding_model.onnx")
+
 print(f"Loading model: {model_path}")
-oww = Model(wakeword_models=[model_path], inference_framework="onnx")
+oww = Model(
+    wakeword_models=[model_path],
+    inference_framework="onnx",
+    melspec_model_path=_MELSPEC,
+    embedding_model_path=_EMBEDDING,
+)
 
 CHUNK, RATE = 1280, 16000
 p = pyaudio.PyAudio()
