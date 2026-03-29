@@ -261,5 +261,6 @@ class OpenWakeWordListener:
         finally:
             if stream is not None:
                 close_stream(stream)
+            self._is_running = False
             self._stream_released.set()
             p.terminate()
