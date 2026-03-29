@@ -34,17 +34,20 @@ if not os.path.exists(model_path):
 RATE = 16000   # openWakeWord requires 16 kHz
 CHUNK = 1280   # 80 ms at 16 kHz
 
+print(f"[DEBUG] Enumerating PyAudio devices...")
 _p = pyaudio.PyAudio()
+print(f"[DEBUG] Total devices found: {_p.get_device_count()}")
 input_index = None
 device_rate = RATE
 for i in range(_p.get_device_count()):
     info = _p.get_device_info_by_index(i)
-    if info["maxInputChannels"] > 0:
+    print(f"[DEBUG]   [{i}] {info['name']}  in={info['maxInputChannels']}  out={info['maxOutputChannels']}  rate={info['defaultSampleRate']}")
+    if info["maxInputChannels"] > 0 and input_index is None:
         input_index = i
         device_rate = int(info["defaultSampleRate"])
-        print(f"Using mic: [{i}] {info['name']} @ {device_rate} Hz")
-        break
+        print(f"[DEBUG]   ^^^ selected as input device (native rate: {device_rate} Hz)")
 _p.terminate()
+print(f"[DEBUG] Done enumerating. input_index={input_index}  device_rate={device_rate}")
 
 if input_index is None:
     print("Error: no input device found. Check your microphone.")
@@ -54,6 +57,7 @@ if input_index is None:
 # resample each chunk to 16 kHz before passing to openWakeWord.
 native_chunk = int(CHUNK * device_rate / RATE)
 needs_resample = device_rate != RATE
+print(f"[DEBUG] native_chunk={native_chunk}  needs_resample={needs_resample}")
 if needs_resample:
     print(f"  (resampling {device_rate} Hz → {RATE} Hz per chunk)")
 
@@ -68,9 +72,19 @@ try:
 except Exception:
     pass
 
+print(f"[DEBUG] Installing ALSA error suppressor...")
 from openwakeword.model import Model
 
 _MODEL_DIR = os.path.dirname(model_path)
+print(f"[DEBUG] model_path={model_path}")
+print(f"[DEBUG] _MODEL_DIR={_MODEL_DIR}")
+import os as _os2
+for fname in ["hey_buddy.onnx", "hey_buddy.onnx.data", "melspectrogram.onnx", "embedding_model.onnx"]:
+    fpath = _os2.path.join(_MODEL_DIR, fname)
+    exists = _os2.path.exists(fpath)
+    size = _os2.path.getsize(fpath) if exists else 0
+    print(f"[DEBUG]   {fname}: {'OK' if exists else 'MISSING'}  ({size} bytes)")
+
 print(f"Loading model: {model_path}")
 oww = Model(
     wakeword_models=[model_path],
@@ -79,15 +93,30 @@ oww = Model(
     embedding_model_path=os.path.join(_MODEL_DIR, "embedding_model.onnx"),
 )
 
+print(f"[DEBUG] Opening PyAudio stream: device={input_index}  rate={device_rate}  frames={native_chunk}")
 p = pyaudio.PyAudio()
-stream = p.open(
-    format=pyaudio.paInt16,
-    channels=1,
-    rate=device_rate,
-    input=True,
-    frames_per_buffer=native_chunk,
-    input_device_index=input_index,
-)
+try:
+    stream = p.open(
+        format=pyaudio.paInt16,
+        channels=1,
+        rate=device_rate,
+        input=True,
+        frames_per_buffer=native_chunk,
+        input_device_index=input_index,
+    )
+except Exception as e:
+    print(f"[DEBUG] p.open() FAILED: {e}")
+    # Try default device at default rate as last resort
+    print(f"[DEBUG] Retrying with default device and rate...")
+    try:
+        stream = p.open(format=pyaudio.paInt16, channels=1, rate=device_rate,
+                        input=True, frames_per_buffer=native_chunk)
+        print(f"[DEBUG] Default device open OK")
+    except Exception as e2:
+        print(f"[DEBUG] Default device also failed: {e2}")
+        p.terminate()
+        sys.exit(1)
+print(f"[DEBUG] Stream opened successfully")
 
 print(f"Listening... say 'hey buddy'  (threshold: {threshold}, Ctrl+C to stop)\n")
 try:
