@@ -627,7 +627,16 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     fi
 done
 
-# Verify openWakeWord installed correctly (model files are in the repo, no download needed)
+# Install openWakeWord without tflite-runtime (no ARM64 wheel exists).
+# We always use inference_framework="onnx" so tflite is never needed.
+# onnxruntime is already in requirements.txt and installs fine on ARM64.
+echo "🔄 Installing openWakeWord (ONNX only, skipping tflite)..."
+if pip install openwakeword --no-deps --quiet; then
+    echo "✅ openWakeWord installed"
+else
+    echo "⚠️  openWakeWord install failed"
+fi
+
 echo "🔄 Verifying openWakeWord..."
 if python -c "from openwakeword.model import Model; print('openWakeWord OK')" 2>/dev/null; then
     echo "✅ openWakeWord ready"
