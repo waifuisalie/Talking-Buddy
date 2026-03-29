@@ -29,39 +29,48 @@ if not os.path.exists(model_path):
     print("  Run 'git pull' to get the model files, or pass the path as an argument.")
     sys.exit(1)
 
-# Find a USB mic (or any input device that supports 16 kHz) before suppressing
-# ALSA errors, while PortAudio can still enumerate devices properly.
+# Collect input device indices BEFORE installing the ALSA error suppressor
+# (PortAudio enumerates cleanly while ALSA is in its normal state).
 CHUNK, RATE = 1280, 16000
 _p = pyaudio.PyAudio()
-input_index = None
-for i in range(_p.get_device_count()):
-    info = _p.get_device_info_by_index(i)
-    if info["maxInputChannels"] < 1:
-        continue
-    try:
-        if _p.is_format_supported(RATE, input_device=i, input_channels=1,
-                                   input_format=pyaudio.paInt16):
-            input_index = i
-            print(f"Using mic: [{i}] {info['name']}")
-            break
-    except ValueError:
-        continue
+_candidates = [
+    i for i in range(_p.get_device_count())
+    if _p.get_device_info_by_index(i)["maxInputChannels"] > 0
+]
+_names = {i: _p.get_device_info_by_index(i)["name"] for i in _candidates}
 _p.terminate()
 
-if input_index is None:
-    print("Error: no input device found that supports 16 kHz. Check your microphone.")
-    sys.exit(1)
-
-# NOW install ALSA error suppressor (keeps the module-level ref to avoid segfault).
+# NOW install ALSA error suppressor so stream-open probing is silent.
+# Keep _EH_CB at module level — if it gets GC'd, ALSA calls freed memory → segfault.
 try:
     _asound = ctypes.cdll.LoadLibrary("libasound.so.2")
     _EH_TYPE = ctypes.CFUNCTYPE(
         None, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p
     )
-    _EH_CB = _EH_TYPE(lambda *a: None)  # module-level ref keeps it alive
+    _EH_CB = _EH_TYPE(lambda *a: None)
     _asound.snd_lib_error_set_handler(_EH_CB)
 except Exception:
     pass
+
+# Try to actually open each candidate at 16 kHz (PortAudio resamples if needed).
+input_index = None
+_probe = pyaudio.PyAudio()
+for i in _candidates:
+    try:
+        _s = _probe.open(format=pyaudio.paInt16, channels=1, rate=RATE,
+                         input=True, frames_per_buffer=CHUNK,
+                         input_device_index=i, start=False)
+        _s.close()
+        input_index = i
+        print(f"Using mic: [{i}] {_names[i]}")
+        break
+    except Exception:
+        continue
+_probe.terminate()
+
+if input_index is None:
+    print("Error: no input device found that supports 16 kHz. Check your microphone.")
+    sys.exit(1)
 
 from openwakeword.model import Model
 
