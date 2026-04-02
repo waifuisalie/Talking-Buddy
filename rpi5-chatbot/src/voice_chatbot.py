@@ -33,6 +33,7 @@ import personality_manager
 import audio_utils
 import conversation
 import esp32_wake_listener
+import openwakeword_listener
 import dismissal_detector
 import timeout_manager
 import sleep_manager
@@ -204,7 +205,8 @@ class VoiceChatbot:
 
     def __init__(self, chatbot_config: Optional[config.ChatbotConfig] = None,
                  wake_listener_mode: esp32_wake_listener.WakeListenerMode = esp32_wake_listener.WakeListenerMode.KEYBOARD,
-                 serial_port: str = "/dev/ttyACM0"):
+                 serial_port: str = "/dev/ttyACM0",
+                 oww_model_path: str = ""):
         # Configuration
         self.config = chatbot_config or config.ChatbotConfig()
 
@@ -228,10 +230,15 @@ class VoiceChatbot:
         # self.silence_detector = audio_utils.SilenceDetector(threshold=self.config.audio.silence_threshold)
 
         # Sleep/wake management
-        self.esp32_listener = esp32_wake_listener.ESP32WakeListener(
-            serial_port=serial_port,
-            mode=wake_listener_mode
-        )
+        if wake_listener_mode == esp32_wake_listener.WakeListenerMode.OPENWAKEWORD:
+            self.esp32_listener = openwakeword_listener.OpenWakeWordListener(
+                model_path=oww_model_path
+            )
+        else:
+            self.esp32_listener = esp32_wake_listener.ESP32WakeListener(
+                serial_port=serial_port,
+                mode=wake_listener_mode
+            )
         self.dismissal_detector = dismissal_detector.DismissalDetector()
         self.timeout_manager = timeout_manager.TimeoutManager(
             conversation_timeout=30.0,  # 30 seconds
@@ -861,6 +868,10 @@ class VoiceChatbot:
             self._stop_loading_audio()
             self._play_feedback_audio("ready", blocking=False)
 
+        # Pause wake listener so it releases the mic before whisper opens it
+        if self.esp32_listener:
+            self.esp32_listener.pause()
+
         # Start whisper STT only if not already running
         if not self.whisper_stt.is_running:
             if not self.whisper_stt.start():
@@ -882,9 +893,13 @@ class VoiceChatbot:
 
     def _enter_light_sleep(self):
         """Enter light sleep mode (Ollama loaded, Whisper OFF)"""
-        # Stop whisper STT
+        # Stop whisper STT (releases the mic)
         if self.whisper_stt:
             self.whisper_stt.stop()
+
+        # Resume wake listener now that the mic is free
+        if self.esp32_listener:
+            self.esp32_listener.resume()
 
         # Stop conversation timer
         self.timeout_manager.stop_conversation_timer()
@@ -892,7 +907,7 @@ class VoiceChatbot:
         # Start idle timer (5 minutes)
         self.timeout_manager.start_idle_timer()
 
-        # Send sleep signal to ESP32
+        # Send sleep signal to ESP32 (no-op for openwakeword mode)
         if self.esp32_listener:
             self.esp32_listener.send_sleep_signal()
 

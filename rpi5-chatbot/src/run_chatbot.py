@@ -5,6 +5,7 @@ Voice Chatbot Runner
 Simple script to run the voice chatbot with optional customizations
 """
 
+import os
 import sys
 import argparse
 import re
@@ -12,6 +13,10 @@ from pathlib import Path
 
 # Add the chatbot module to Python path
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Default openWakeWord model path (relative to this repo, works after git pull)
+_CHATBOT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_OWW_MODEL = os.path.join(_CHATBOT_ROOT, "models", "openwakeword", "hey_buddy.onnx")
 
 # Import with absolute imports
 import config
@@ -199,15 +204,21 @@ def main():
     parser.add_argument(
         "--wake-mode",
         type=str,
-        choices=["serial", "keyboard", "disabled"],
-        default="serial",
-        help="Wake word mode (default: serial). 'serial' for ESP32, 'keyboard' for testing with 'w' key, 'disabled' for always-on"
+        choices=["serial", "keyboard", "disabled", "openwakeword"],
+        default="openwakeword",
+        help="Wake word mode. 'openwakeword'=on-device ML (default), 'serial'=ESP32, 'keyboard'=press w, 'disabled'=always-on"
     )
     parser.add_argument(
         "--serial-port",
         type=str,
         default="/dev/ttyACM0",
         help="Serial port for ESP32 wake word (default: /dev/ttyACM0)"
+    )
+    parser.add_argument(
+        "--oww-model",
+        type=str,
+        default=_DEFAULT_OWW_MODEL,
+        help="Path to openWakeWord ONNX model (default: models/openwakeword/hey_buddy.onnx)"
     )
     parser.add_argument(
         "--start-mode",
@@ -287,23 +298,33 @@ def main():
     mode_map = {
         "serial": esp32_wake_listener.WakeListenerMode.SERIAL,
         "keyboard": esp32_wake_listener.WakeListenerMode.KEYBOARD,
-        "disabled": esp32_wake_listener.WakeListenerMode.DISABLED
+        "disabled": esp32_wake_listener.WakeListenerMode.DISABLED,
+        "openwakeword": esp32_wake_listener.WakeListenerMode.OPENWAKEWORD,
     }
     wake_listener_mode = mode_map[args.wake_mode]
 
+    # Validate openwakeword model file exists
+    if args.wake_mode == "openwakeword" and not os.path.exists(args.oww_model):
+        print(f"Error: openWakeWord model not found: {args.oww_model}")
+        print("  Run 'git pull' to get the model files, or pass --oww-model <path>")
+        return
+
     # Print wake mode configuration
     if args.wake_mode == "serial":
-        print(f"📡 Wake mode: ESP32 Serial ({args.serial_port})")
+        print(f"Wake mode: ESP32 Serial ({args.serial_port})")
     elif args.wake_mode == "keyboard":
-        print("⌨️  Wake mode: Keyboard (press 'w' to wake)")
+        print("Wake mode: Keyboard (press 'w' to wake)")
+    elif args.wake_mode == "openwakeword":
+        print(f"Wake mode: openWakeWord ({args.oww_model})")
     else:
-        print("🔓 Wake mode: Disabled (always listening)")
+        print("Wake mode: Disabled (always listening)")
 
     # Create chatbot with wake mode
     chatbot = voice_chatbot.VoiceChatbot(
         chatbot_config,
         wake_listener_mode,
-        serial_port=args.serial_port
+        serial_port=args.serial_port,
+        oww_model_path=args.oww_model
     )
 
     if args.clear_history:
