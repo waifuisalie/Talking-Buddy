@@ -59,6 +59,16 @@ try:
 except ImportError as e:
     ESP32_AVAILABLE = False
 
+try:
+    from battery_monitor import BatteryMonitor
+    battery_monitor = BatteryMonitor()
+    BATTERY_AVAILABLE = True
+    print("🔋 Battery monitor loaded")
+except Exception as e:
+    battery_monitor = None
+    BATTERY_AVAILABLE = False
+    print(f"⚠️  Battery monitor disabled: {e}")
+
 WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
 DEBUG_LOGS = os.getenv('DEBUG_LOGS', 'false').lower() == 'true'
 
@@ -72,7 +82,7 @@ app.secret_key = secrets.token_hex(32)
 if not DEBUG_LOGS:
     import logging
 
-    _POLL_PATHS = ('/api/wake_word_status', '/usuarios/rfid/poll')
+    _POLL_PATHS = ('/api/wake_word_status', '/usuarios/rfid/poll', '/api/system/battery')
 
     class _SuppressPollLogs(logging.Filter):
         def filter(self, record):
@@ -205,6 +215,9 @@ import atexit
 atexit.register(cleanup_rfid_process)
 atexit.register(cleanup_wake_word_manager)
 
+if BATTERY_AVAILABLE and battery_monitor:
+    atexit.register(battery_monitor.close)
+
 
 def shutdown_gracefully(signum=None, frame=None):
     """Encerra o sistema de forma limpa ao receber SIGINT ou SIGTERM"""
@@ -212,6 +225,13 @@ def shutdown_gracefully(signum=None, frame=None):
 
     cleanup_rfid_process()
     cleanup_wake_word_manager()
+
+    if BATTERY_AVAILABLE and battery_monitor:
+        try:
+            battery_monitor.close()
+            print("✅ Battery monitor encerrado", flush=True)
+        except Exception:
+            pass
 
     if audio_player:
         try:
@@ -1478,6 +1498,14 @@ def api_voice_status():
             status['whisper_model'] = voice_config.whisper_model if voice_config else 'unknown'
     
     return jsonify(status)
+
+
+@app.route('/api/system/battery', methods=['GET'])
+def api_system_battery():
+    """Retorna status da bateria do UPS HAT"""
+    if not BATTERY_AVAILABLE or not battery_monitor:
+        return jsonify({'available': False})
+    return jsonify(battery_monitor.read())
 
 
 @app.route('/api/voice/record_and_transcribe', methods=['POST'])

@@ -1114,8 +1114,8 @@ select {
 
 .user-greeting-overlay {
     position: absolute;
-    top: 20px;
-    right: 20px;  /* AJUSTADO: De 80px para 20px (mesma distância do botão config) */
+    top: 64px;
+    right: 20px;
     z-index: 10;
     color: var(--accent-color);
     font-size: 0.95rem;
@@ -1606,7 +1606,7 @@ select {
     .user-greeting-overlay {
         font-size: 1rem;
         padding: 10px 20px;
-        top: 70px;
+        top: 110px;
     }
 }
 
@@ -1643,7 +1643,141 @@ select {
     .user-greeting-overlay {
         font-size: 0.9rem;
         padding: 8px 16px;
+        top: 100px;
+    }
+}
+
+/* Fallback when battery monitor is unavailable */
+body.no-battery .user-greeting-overlay {
+    top: 20px;
+}
+
+@media (max-width: 768px) {
+    body.no-battery .user-greeting-overlay {
+        top: 70px;
+    }
+}
+
+@media (max-width: 480px) {
+    body.no-battery .user-greeting-overlay {
         top: 60px;
+    }
+}
+
+/* ========== BATTERY INDICATOR ========== */
+
+@keyframes battery-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.battery-indicator {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.7);
+    border: 2px solid var(--accent-color);
+    border-radius: 16px;
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    color: var(--accent-color);
+    filter: drop-shadow(0 0 8px var(--glow));
+    animation: slideInRight 0.3s ease-out;
+    cursor: default;
+}
+
+.battery-indicator.hidden {
+    display: none !important;
+}
+
+.battery-svg {
+    width: 28px;
+    height: 14px;
+}
+
+.battery-charging {
+    width: 12px;
+    height: 16px;
+}
+
+.battery-charging.hidden {
+    display: none;
+}
+
+.battery-text {
+    font-weight: bold;
+    min-width: 32px;
+    text-align: right;
+}
+
+.battery-warn {
+    font-weight: bold;
+    font-size: 1rem;
+}
+
+.battery-warn.hidden {
+    display: none;
+}
+
+/* Battery states */
+.battery-indicator.battery-normal {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    filter: drop-shadow(0 0 8px rgba(0, 255, 0, 0.3));
+}
+
+.battery-indicator.battery-medium {
+    color: var(--warning-color);
+    border-color: var(--warning-color);
+    filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.3));
+}
+
+.battery-indicator.battery-low {
+    color: var(--error-color);
+    border-color: var(--error-color);
+    filter: drop-shadow(0 0 8px rgba(255, 0, 0, 0.3));
+    animation: battery-pulse 2s ease-in-out infinite;
+}
+
+.battery-indicator.battery-critical {
+    color: var(--error-color);
+    border-color: var(--error-color);
+    filter: drop-shadow(0 0 12px rgba(255, 0, 0, 0.5));
+    animation: battery-pulse 0.8s ease-in-out infinite;
+}
+
+.battery-indicator.battery-charging {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    filter: drop-shadow(0 0 8px rgba(0, 255, 0, 0.3));
+    animation: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .battery-indicator {
+        top: 15px;
+        right: 15px;
+    }
+}
+
+@media (max-width: 480px) {
+    .battery-indicator {
+        font-size: 0.75rem;
+        padding: 4px 10px;
+        gap: 4px;
+    }
+
+    .battery-svg {
+        width: 24px;
+        height: 12px;
     }
 }
 

@@ -75,6 +75,31 @@ let currentValue = '';
 let isShiftActive = false;
 
 
+// ========== FUNÇÕES DE INTERNACIONALIZAÇÃO DO TECLADO ==========
+
+/**
+ * 🌐 Atualiza todos os textos do teclado virtual com base no idioma atual
+ * Chamado ao abrir o teclado e quando o idioma muda
+ */
+function updateKeyboardLanguage() {
+    if (!window.i18n) {
+        console.warn('[Keyboard] i18n não disponível ainda');
+        return;
+    }
+    
+    console.log('[Keyboard] 🌐 Atualizando idioma do teclado para:', window.i18n.getCurrentLanguage());
+    
+    // Atualiza todos os elementos com data-i18n-text dentro do teclado
+    const keyboardElements = document.querySelectorAll('#virtual-keyboard [data-i18n-text]');
+    keyboardElements.forEach(element => {
+        const key = element.getAttribute('data-i18n-text');
+        if (key) {
+            element.textContent = window.i18n.t(key);
+        }
+    });
+}
+
+
 // ========== POPUP PERSONALIZADO ==========
 
 function showPopup(message) {
@@ -99,6 +124,12 @@ document.addEventListener('DOMContentLoaded', () => {
     initMatrixRain();
     initializeInputs();
     initializeKeyboard();
+    
+    // 🌐 Listener para mudança de idioma (quando usuário faz login)
+    window.addEventListener('languageChanged', () => {
+        console.log('[main.js] 🌐 Idioma mudou, atualizando teclado...');
+        updateKeyboardLanguage();
+    });
 });
 
 
@@ -120,6 +151,8 @@ function initializeInputs() {
 }
 
 function openKeyboard(inputElement) {
+    console.log('[Keyboard] 🔓 Abrindo teclado para:', inputElement.id || inputElement.name);
+    
     currentInput = inputElement;
     currentValue = inputElement.value || '';
     
@@ -127,11 +160,29 @@ function openKeyboard(inputElement) {
     const keyboard = document.getElementById('virtual-keyboard');
     keyboard.classList.add('active');
     
+    // 🌐 ATUALIZA IDIOMA DO TECLADO antes de mostrar
+    updateKeyboardLanguage();
+    
     // Atualiza o título do teclado baseado no campo
     updateKeyboardTitle(inputElement);
     
-    // Atualiza o display
+    // 🔥 CORREÇÃO: Atualiza o display DUAS VEZES para garantir
+    // Primeira atualização: Imediata
     updateKeyboardDisplay();
+    
+    // Segunda atualização: Após pequeno delay (garante que DOM está pronto)
+    setTimeout(() => {
+        console.log('[Keyboard] 🔄 Segunda atualização (fallback safety)');
+        updateKeyboardDisplay();
+        
+        // 🔥 GARANTIA: Verificar se cursor está visível
+        const cursorElement = document.querySelector('.cursor');
+        if (cursorElement) {
+            console.log('[Keyboard] ✅ Cursor encontrado e visível');
+        } else {
+            console.warn('[Keyboard] ⚠️ Cursor não encontrado no DOM!');
+        }
+    }, 100);
     
     // Focus no input (visual)
     inputElement.classList.add('active');
@@ -196,6 +247,7 @@ function typeKey(char) {
     }
     
     currentValue += char;
+    console.log('[Keyboard] ⌨️ Tecla digitada:', char, '| Total:', currentValue.length, 'chars');
     updateKeyboardDisplay();
 }
 
@@ -225,40 +277,53 @@ function updateShiftKeys() {
 
 function updateKeyboardDisplay() {
     const textElement = document.getElementById('keyboard-text');
-    if (textElement) {
-        textElement.textContent = currentValue;
+    
+    // 🔥 DEBUG: Log para rastrear problema
+    if (!textElement) {
+        console.error('[Keyboard] ❌ keyboard-text element not found! Tentando fallback...');
+        
+        // Tentar recuperar forçando querySelector
+        const textElementBackup = document.querySelector('#keyboard-text');
+        if (textElementBackup) {
+            console.log('[Keyboard] ✅ Elemento encontrado via querySelector (fallback)');
+            textElementBackup.textContent = currentValue;
+            return;
+        }
+        
+        // Se ainda falhar, mostrar erro crítico
+        console.error('[Keyboard] ❌ CRÍTICO: Não foi possível atualizar display! DOM pode não estar pronto.');
+        console.error('[Keyboard] currentValue:', currentValue);
+        return;
     }
+    
+    // Atualização normal
+    textElement.textContent = currentValue;
+    console.log('[Keyboard] ✅ Display atualizado:', currentValue.length, 'caracteres');
 }
 
 function updateKeyboardTitle(inputElement) {
     const titleElement = document.getElementById('keyboard-title');
     
-    // Mapeamento de campos para mensagens específicas
-    const fieldMessages = {
-        'username': 'Digite seu usuário administrador',
-        'password': 'Digite sua senha administradora',
-        'current_password': 'Digite sua senha administradora atual',
-        'new_password': 'Digite sua nova senha administradora',
-        'confirm_password': 'Digite a confirmação da senha',
-        'name': 'Digite o nome do usuário',
-        'rfid': 'Digite o RFID'
+    // 🌐 Mapeamento de campos para chaves de tradução i18n
+    const fieldI18nKeys = {
+        'username': 'keyboard.title_username',
+        'password': 'keyboard.title_password',
+        'current_password': 'keyboard.title_password',
+        'new_password': 'keyboard.title_password',
+        'confirm_password': 'keyboard.title_password',
+        'name': 'keyboard.title_name',
+        'rfid': 'keyboard.title_rfid'
     };
     
     // Verifica se há mensagem personalizada para este campo
-    if (fieldMessages[inputElement.id]) {
-        titleElement.textContent = fieldMessages[inputElement.id];
-    } else if (fieldMessages[inputElement.name]) {
-        titleElement.textContent = fieldMessages[inputElement.name];
+    let i18nKey = fieldI18nKeys[inputElement.id] || fieldI18nKeys[inputElement.name];
+    
+    if (i18nKey) {
+        // Usa tradução específica
+        titleElement.textContent = window.i18n.t(i18nKey);
     } else {
-        // Fallback: tenta usar o label
-        const label = document.querySelector(`label[for="${inputElement.id}"]`);
-        
-        if (label && label.textContent) {
-            const labelText = label.textContent.trim().replace(':', '');
-            titleElement.textContent = `Digite ${labelText.toLowerCase()}`;
-        } else {
-            titleElement.textContent = 'Digite:';
-        }
+        // Fallback: usa título padrão
+        titleElement.textContent = window.i18n.t('keyboard.title_default');
     }
 }
 
