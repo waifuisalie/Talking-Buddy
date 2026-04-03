@@ -22,7 +22,7 @@ if ! systemctl is-active --quiet ollama 2>/dev/null; then
 fi
 
 # Base models that must exist
-BASE_MODELS=("gemma3:1b" "qwen2.5:1.5b" "llama3.2:1b" "qwen3:0.8b")
+BASE_MODELS=("gemma3:1b" "qwen2.5:1.5b" "llama3.2:1b" "qwen3.5:0.8b")
 
 # Check which base models are available
 echo "📦 Checking base models..."
@@ -51,7 +51,7 @@ declare -A MODEL_TO_DIR=(
     ["gemma3:1b"]="gemma3"
     ["qwen2.5:1.5b"]="qwen2.5"
     ["llama3.2:1b"]="llama3.2"
-    ["qwen3:0.8b"]="qwen3"
+    ["qwen3.5:0.8b"]="qwen3.5"
 )
 
 # Build list of directories to process
@@ -167,7 +167,7 @@ echo ""
 
 if [ $CREATED -gt 0 ] || [ $SKIPPED -gt 0 ]; then
     echo "📊 Available personality models:"
-    ollama list | grep -E "(gemma3|qwen2.5|llama3.2|qwen3).*-ptbr-" || echo "   (none yet)"
+    ollama list | grep -E "(gemma3|qwen2\.5|llama3\.2|qwen3\.5).*-ptbr-" || echo "   (none yet)"
     echo ""
     echo "🎯 Usage examples:"
     echo "   python src/run_chatbot.py --personality casual"

@@ -61,7 +61,7 @@ class VoiceConfig:
         """Carrega configuração de variáveis de ambiente (.env)"""
         return cls(
             # Ollama
-            ollama_model=os.getenv('OLLAMA_MODEL', 'qwen3:0.8b'),
+            ollama_model=os.getenv('OLLAMA_MODEL', 'qwen3.5:0.8b'),
             ollama_url=os.getenv('OLLAMA_URL', 'http://localhost:11434/api/chat'),
             # Piper TTS
             piper_binary=os.path.expanduser(os.getenv('PIPER_BINARY', '~/piper/piper/piper')),

@@ -518,19 +518,19 @@ if ! ollama list | grep -q "gemma3:1b"; then
     exit 1
 fi
 
-# Pull qwen3:0.8b (smaller, faster model — good alternative to gemma3:1b)
-if ollama list | grep -q "qwen3:0.8b"; then
-    echo "⏭️  Model qwen3:0.8b already exists, skipping download"
+# Pull qwen3.5:0.8b (smaller, faster model — good alternative to gemma3:1b)
+if ollama list | grep -q "qwen3.5:0.8b"; then
+    echo "⏭️  Model qwen3.5:0.8b already exists, skipping download"
 else
-    echo "🔄 Pulling model qwen3:0.8b (~500MB)..."
+    echo "🔄 Pulling model qwen3.5:0.8b (~500MB)..."
     echo "   This may take several minutes depending on your connection..."
 
     MAX_RETRIES=3
     RETRY_COUNT=0
 
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if ollama pull qwen3:0.8b; then
-            echo "✅ qwen3:0.8b downloaded successfully"
+        if ollama pull qwen3.5:0.8b; then
+            echo "✅ qwen3.5:0.8b downloaded successfully"
             break
         else
             RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -538,8 +538,8 @@ else
                 echo "⚠️  Download failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
                 sleep 5
             else
-                echo "⚠️  Failed to download qwen3:0.8b after $MAX_RETRIES attempts (non-fatal)"
-                echo "   You can install it later: ollama pull qwen3:0.8b"
+                echo "⚠️  Failed to download qwen3.5:0.8b after $MAX_RETRIES attempts (non-fatal)"
+                echo "   You can install it later: ollama pull qwen3.5:0.8b"
             fi
         fi
     done
@@ -811,7 +811,7 @@ if ! ollama list | grep -q "gemma3:1b"; then
 fi
 
 # Check if personality models already exist
-EXISTING_PERSONALITIES=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2|qwen3).*-ptbr-" | wc -l)
+EXISTING_PERSONALITIES=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2|qwen3.5).*-ptbr-" | wc -l)
 
 if [ "$EXISTING_PERSONALITIES" -gt 0 ]; then
     echo "⏭️  Found $EXISTING_PERSONALITIES personality model(s) already created"
@@ -846,7 +846,7 @@ fi
 cd "$SCRIPT_DIR"
 
 # Verify at least one personality model exists
-PERSONALITY_COUNT=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2|qwen3).*-ptbr-" | wc -l)
+PERSONALITY_COUNT=$(ollama list | grep -E "(gemma3|qwen2.5|llama3.2|qwen3.5).*-ptbr-" | wc -l)
 if [ "$PERSONALITY_COUNT" -eq 0 ]; then
     show_error "No personality models found after creation" \
                "Model creation may have failed"
