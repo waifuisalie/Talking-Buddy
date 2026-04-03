@@ -86,13 +86,13 @@ else
 fi
 
 # Verificar modelo (accept base model or any personality model)
-if ! ollama list | grep -qE "gemma3:1b|gemma3-ptbr|qwen2\.5.*-ptbr|llama3\.2.*-ptbr"; then
-    echo -e "${YELLOW}⚠️  Nenhum modelo encontrado. Baixando gemma3:1b...${NC}"
-    ollama pull gemma3:1b
+if ! ollama list | grep -qE "gemma3:1b|gemma3-ptbr|qwen2\.5.*-ptbr|llama3\.2.*-ptbr|qwen3.*-ptbr|qwen3:0\.8b"; then
+    echo -e "${YELLOW}⚠️  Nenhum modelo encontrado. Baixando qwen3:0.8b...${NC}"
+    ollama pull qwen3:0.8b
 fi
 
 # Count personality models
-PERSONALITY_COUNT=$(ollama list | grep -cE "(gemma3|qwen2\.5|llama3\.2).*-ptbr-" 2>/dev/null || echo "0")
+PERSONALITY_COUNT=$(ollama list | grep -cE "(gemma3|qwen2\.5|llama3\.2|qwen3).*-ptbr-" 2>/dev/null || echo "0")
 if [ "$PERSONALITY_COUNT" -gt 0 ]; then
     echo -e "${GREEN}✓${NC} Modelo Ollama disponível ($PERSONALITY_COUNT personalidades)"
 else
@@ -102,7 +102,7 @@ fi
 # Aquecimento do Ollama: envia uma mensagem curta para carregar o modelo na RAM
 # e aquecer o KV-cache. Sem isso, o primeiro pedido do usuário demora ~7-9s
 # para o primeiro token; após este aquecimento, cai para ~3-5s.
-OLLAMA_WARMUP_MODEL="${OLLAMA_MODEL:-gemma3:1b}"
+OLLAMA_WARMUP_MODEL="${OLLAMA_MODEL:-qwen3:0.8b}"
 echo "🔄 Aquecendo Ollama (carregando modelo $OLLAMA_WARMUP_MODEL na RAM)..."
 WARMUP_START=$SECONDS
 WARMUP_RESPONSE=$(curl -s --max-time 60 http://127.0.0.1:11434/api/chat \

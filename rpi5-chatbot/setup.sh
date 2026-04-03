@@ -818,25 +818,21 @@ if [ "$EXISTING_PERSONALITIES" -gt 0 ]; then
     echo "   Checking if all personalities exist..."
 fi
 
-# Generate Modelfiles if needed
-if [ ! -d "models/gemma3" ] || [ ! -f "models/gemma3/Modelfile.casual" ]; then
-    echo "🔄 Generating personality Modelfiles from personalities.yaml..."
-    cd models/
-    if python3 generate_personalities.py; then
-        echo "✅ Modelfiles generated successfully"
-    else
-        show_error "Failed to generate personality Modelfiles" \
-                   "Check personalities.yaml and generate_personalities.py"
-        echo ""
-        echo "Troubleshooting:"
-        echo "  - Check YAML: cat models/personalities.yaml"
-        echo "  - Run manually: cd models && python3 generate_personalities.py"
-        exit 1
-    fi
-    cd "$SCRIPT_DIR"
+# Always regenerate Modelfiles so newly installed models (e.g. qwen3) are never skipped
+echo "🔄 Generating personality Modelfiles from personalities.yaml..."
+cd models/
+if python3 generate_personalities.py; then
+    echo "✅ Modelfiles generated successfully"
 else
-    echo "⏭️  Personality Modelfiles already generated"
+    show_error "Failed to generate personality Modelfiles" \
+               "Check personalities.yaml and generate_personalities.py"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  - Check YAML: cat models/personalities.yaml"
+    echo "  - Run manually: cd models && python3 generate_personalities.py"
+    exit 1
 fi
+cd "$SCRIPT_DIR"
 
 # Create all personality models
 echo "🔄 Creating personality models..."

@@ -75,7 +75,7 @@ class WhisperConfig:
 @dataclass
 class OllamaConfig:
     url: str = "http://localhost:11434/api/chat"  # Using /chat endpoint for proper message handling
-    model: str = "gemma3-ptbr"  # Default: gemma3 with forced Portuguese (fastest for RPi5)
+    model: str = "qwen3-ptbr"  # Default: qwen3:0.8b (smaller, faster than gemma3:1b)
     temperature: float = 0.7
     max_tokens: int = 1500  # Enough for verbose personalities (educational, storyteller)
     timeout: int = 30
