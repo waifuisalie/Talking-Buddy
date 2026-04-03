@@ -36,12 +36,13 @@ class OllamaClient:
                 "model": self.config.ollama_model,
                 "messages": messages,
                 "stream": False,
+                "think": False,
                 "options": {
                     "temperature": self.config.ollama_temperature,
                     "num_predict": self.config.ollama_max_tokens
                 }
             }
-            
+
             print(f"🤖 [Ollama] Gerando resposta com {self.config.ollama_model}...")
             print(f"⏱️  [Ollama] Timeout configurado: {self.config.ollama_timeout}s")
             
@@ -105,6 +106,7 @@ class OllamaClient:
                 "model": use_model,
                 "messages": messages,
                 "stream": True,
+                "think": False,
                 "options": {
                     "temperature": self.config.ollama_temperature,
                     "num_predict": self.config.ollama_max_tokens
@@ -190,6 +192,7 @@ class OllamaClient:
                 "model": self.config.ollama_model,
                 "messages": [{"role": "user", "content": "OK"}],
                 "stream": False,
+                "think": False,
                 "options": {"num_predict": 5}  # Apenas 5 tokens para warmup
             }
             
