@@ -55,14 +55,16 @@ Talking-Buddy/
 
 ## How to Run
 
+**Always use the system-interface start script:**
 ```bash
-cd rpi5-chatbot
-bash run.sh [args]          # Recommended: pre-flight checks + venv activation
-
-# Or directly:
-source venv/bin/activate
-python src/run_chatbot.py [args]
+cd system-interface
+bash start.sh              # Normal run
+bash start.sh --timing     # With per-stage timing logs (STT / LLM / TTS / pipeline)
 ```
+
+`start.sh` is the single entry point. It starts Ollama, warms up the model and Supertonic TTS, calibrates VAD, then launches the Flask app (`src/app.py`) which integrates the full voice chatbot pipeline.
+
+`--timing` sets `TIMING_DEBUG=1` (env var), which config.py reads on import to enable `tlog()` output across all modules (whisper_stt, ollama_llm, supertonic_tts, voice_chatbot).
 
 ### Common CLI Arguments
 

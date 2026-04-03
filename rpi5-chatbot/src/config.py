@@ -15,7 +15,8 @@ import os
 import time
 
 # --- Timing debug ---
-_timing_debug = False
+# Can be enabled via TIMING_DEBUG=1 env var (set by start.sh --timing) or set_timing_debug()
+_timing_debug = os.environ.get('TIMING_DEBUG', '').lower() in ('1', 'true', 'yes')
 
 def set_timing_debug(enabled: bool):
     global _timing_debug

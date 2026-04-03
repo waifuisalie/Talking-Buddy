@@ -11,10 +11,22 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Parse arguments
+TIMING_DEBUG=0
+for arg in "$@"; do
+    case "$arg" in
+        --timing) TIMING_DEBUG=1 ;;
+    esac
+done
+export TIMING_DEBUG
+
 echo ""
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "${BLUE}    TALKINGBUDDY - Sistema Integrado de Cadastro e Voz${NC}"
 echo -e "${BLUE}======================================================================${NC}"
+if [ "$TIMING_DEBUG" = "1" ]; then
+    echo -e "${YELLOW}  ⏱️  Timing debug ativado${NC}"
+fi
 echo ""
 
 # Get script directory

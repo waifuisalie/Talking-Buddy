@@ -17,6 +17,7 @@ KNOWN_BASE_MODELS = {
     "gemma3:1b": "gemma3",
     "qwen2.5:1.5b": "qwen2.5",
     "llama3.2:1b": "llama3.2",
+    "qwen3:0.8b": "qwen3",
 }
 
 
