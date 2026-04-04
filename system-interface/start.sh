@@ -140,18 +140,10 @@ else
     echo -e "${GREEN}✓${NC} Dependências já instaladas"
 fi
 
-# Verificar PyAudio (necessário para reconhecimento de voz)
-if ! python3 -c "import pyaudio" 2>/dev/null; then
-    echo "🔄 Instalando PyAudio (reconhecimento de voz)..."
-    pip install pyaudio
-    echo -e "${GREEN}✓${NC} PyAudio instalado"
-fi
-
 # Verificar openWakeWord (necessário para detecção de wake word local)
+# Instalado com --no-deps pois tflite-runtime não tem wheel para aarch64
 if ! python3 -c "import openwakeword" 2>/dev/null; then
-    echo "🔄 Instalando openWakeWord e dependências (sem tflite para aarch64)..."
-    # Instala dependências manualmente (tflite-runtime não tem wheel aarch64)
-    pip install "onnxruntime==1.20.1" tqdm scipy scikit-learn --quiet
+    echo "🔄 Instalando openWakeWord (sem tflite para aarch64)..."
     pip install openwakeword --no-deps --quiet
 fi
 if python3 -c "import openwakeword" 2>/dev/null; then
