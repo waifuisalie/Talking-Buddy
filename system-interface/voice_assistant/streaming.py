@@ -103,7 +103,7 @@ class StreamingTTSProcessor:
         Initialize streaming TTS processor
 
         Args:
-            tts_engine: TTS instance (TTSClient or SupertonicTTSClient) with synthesize_to_temp()
+            tts_engine: SupertonicTTSClient instance with synthesize_to_temp()
             audio_player: HardwareAudioPlayer instance with queue support
             min_sentence_length: Minimum characters for sentence detection
         """

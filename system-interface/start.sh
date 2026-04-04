@@ -160,13 +160,13 @@ else
     echo -e "${YELLOW}⚠️  openWakeWord não disponível (wake word desabilitado)${NC}"
 fi
 
-# Verificar Supertonic TTS (opcional, mas recomendado)
+# Verificar Supertonic TTS (obrigatório)
 if python3 -c "import supertonic" 2>/dev/null; then
     SUPERTONIC_AVAILABLE=true
     echo -e "${GREEN}✓${NC} Supertonic 2 TTS disponível (multilingual, 9x mais rápido)"
 else
     SUPERTONIC_AVAILABLE=false
-    echo -e "${YELLOW}⚠️  Supertonic 2 TTS não instalado (usando Piper como fallback)${NC}"
+    echo -e "${RED}❌ Supertonic 2 TTS não instalado${NC}"
     echo "   Para instalar: pip install supertonic"
 fi
 
@@ -183,12 +183,6 @@ if [ ! -f ".env" ]; then
         cp .env.example .env
         
         # Atualizar paths automaticamente
-        sed -i "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env 2>/dev/null || \
-        sed -i '' "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env 2>/dev/null
-        
-        sed -i "s|~/piper/piper/|$HOME/piper/piper/|g" .env 2>/dev/null || \
-        sed -i '' "s|~/piper/piper/|$HOME/piper/piper/|g" .env 2>/dev/null
-        
         echo -e "${GREEN}✓${NC} Arquivo .env criado"
     else
         echo -e "${YELLOW}⚠️  .env não encontrado (voz pode não funcionar)${NC}"
@@ -416,7 +410,7 @@ echo ""
 echo -e "${BLUE}Funcionalidades disponíveis:${NC}"
 echo "  • Cadastro de usuários via RFID"
 echo "  • Interface de chat com robô (animação SSE em tempo real)"
-echo "  • Integração de voz (TTS com Piper ou Supertonic)"
+echo "  • Integração de voz (TTS com Supertonic)"
 echo "  • Reconhecimento de voz (STT com Whisper + Mean VAD)"
 echo "  • Conversas com IA (Ollama + streaming)"
 echo "  • Sistema de personalidades (9 estilos de resposta)"
@@ -425,10 +419,8 @@ echo ""
 echo -e "${YELLOW}Configuração de TTS:${NC}"
 if [ "$SUPERTONIC_AVAILABLE" = true ]; then
     echo "  • Engine: Supertonic 2 (multilingual, 9x mais rápido)"
-    echo "  • Fallback: Piper (português)"
 else
-    echo "  • Engine: Piper (português)"
-    echo "  • Supertonic: Não instalado (pip install supertonic)"
+    echo "  • ⚠️  Supertonic não instalado - TTS indisponível (pip install supertonic)"
 fi
 echo ""
 echo -e "${YELLOW}Dispositivos de áudio:${NC}"
