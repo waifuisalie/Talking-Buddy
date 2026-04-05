@@ -140,6 +140,17 @@ else
     echo -e "${GREEN}✓${NC} Dependências já instaladas"
 fi
 
+# Verificar dependências RAG (sentence-transformers + pypdf)
+if ! python3 -c "import sentence_transformers; import pypdf" 2>/dev/null; then
+    echo "🔄 Instalando dependências de RAG (sentence-transformers, pypdf)..."
+    pip install sentence-transformers pypdf --quiet
+fi
+if python3 -c "import sentence_transformers; import pypdf" 2>/dev/null; then
+    echo -e "${GREEN}✓${NC} Dependências RAG disponíveis"
+else
+    echo -e "${YELLOW}⚠️  Dependências RAG não disponíveis (RAG desabilitado)${NC}"
+fi
+
 # Verificar openWakeWord (necessário para detecção de wake word local)
 # Instalado com --no-deps pois tflite-runtime não tem wheel para aarch64
 if ! python3 -c "import openwakeword" 2>/dev/null; then
@@ -185,6 +196,7 @@ fi
 
 # Verificar diretórios necessários
 mkdir -p data
+mkdir -p data/documents
 mkdir -p static/audio
 echo -e "${GREEN}✓${NC} Diretórios criados"
 
@@ -385,6 +397,35 @@ if echo "$VAD_CALIBRATION" | grep -q "^OK|"; then
 else
     ERR=$(echo "$VAD_CALIBRATION" | cut -d'|' -f2-)
     echo -e "${YELLOW}⚠️  Calibração VAD falhou: ${ERR} (usando padrão=30)${NC}"
+fi
+
+# ============================================================================
+# 7b. VERIFICAR MODELO DE EMBEDDINGS (RAG multilingual)
+# ============================================================================
+echo ""
+echo -e "${YELLOW}[7b]${NC} Verificando modelo de embeddings (RAG multilingual)..."
+
+EMBED_RESULT=$(python3 - <<'PYEOF'
+import sys, time
+try:
+    from sentence_transformers import SentenceTransformer
+    t0 = time.time()
+    m = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    m.encode("teste de aquecimento", show_progress_bar=False)
+    print(f"OK|{time.time()-t0:.1f}s")
+except Exception as e:
+    print(f"FAIL|{e}")
+PYEOF
+)
+
+if echo "$EMBED_RESULT" | grep -q "^OK|"; then
+    EMBED_TIME=$(echo "$EMBED_RESULT" | cut -d'|' -f2)
+    echo -e "${GREEN}✓${NC} Embedding model pronto (${EMBED_TIME} load)"
+else
+    ERR=$(echo "$EMBED_RESULT" | cut -d'|' -f2-)
+    echo -e "${YELLOW}⚠️  Embedding model falhou (RAG indisponível): ${ERR}${NC}"
+    echo "   Para corrigir execute: pip install sentence-transformers"
+    echo "   O modelo será baixado automaticamente (~450MB) na primeira execução"
 fi
 
 # ============================================================================

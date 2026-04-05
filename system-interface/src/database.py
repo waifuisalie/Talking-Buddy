@@ -74,6 +74,27 @@ CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_rfid ON users(rfid);
 CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON conversation_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_created_at ON conversation_history(created_at);
+
+CREATE TABLE IF NOT EXISTS rag_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  source_file TEXT NOT NULL,
+  chunk_count INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id INTEGER NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  chunk_text TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  FOREIGN KEY(document_id) REFERENCES rag_documents(id) ON DELETE CASCADE
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS user_facts_fts USING fts5(
+  topic, content, content=user_data, content_rowid=id
+);
 """
 
 
@@ -103,6 +124,15 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA_SQL)
         self.conn.commit()
+        # Migration: add specialization_id to existing databases
+        try:
+            self.conn.execute(
+                "ALTER TABLE users ADD COLUMN specialization_id INTEGER "
+                "REFERENCES rag_documents(id)"
+            )
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     def close(self):
         """Fecha a conexão com o banco"""
@@ -156,7 +186,7 @@ class Database:
         """Lista todos os usuários ordenados por nome"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users ORDER BY name COLLATE NOCASE"
         )
         return cur.fetchall()
@@ -165,17 +195,17 @@ class Database:
         """Busca um usuário por ID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users WHERE id=?",
             (user_id,),
         )
         return cur.fetchone()
-    
+
     def get_user_by_rfid(self, rfid: str) -> Optional[sqlite3.Row]:
         """Busca um usuário por RFID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users WHERE rfid=?",
             (rfid,),
         )
@@ -198,16 +228,6 @@ class Database:
         else:
             cur.execute("SELECT 1 FROM users WHERE rfid=? LIMIT 1", (rfid,))
         return cur.fetchone() is not None
-    
-    def get_user_by_rfid(self, rfid: str) -> Optional[sqlite3.Row]:
-        """Busca um usuário pelo RFID"""
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
-            "FROM users WHERE rfid=?",
-            (rfid,),
-        )
-        return cur.fetchone()
 
     def add_user(self, name: str, rfid: str, response_style: str, 
                  persona_gender: str, language: str) -> int:
@@ -224,13 +244,22 @@ class Database:
         self.conn.commit()
         return cur.lastrowid
 
-    def update_user(self, user_id: int, name: str, rfid: str, 
+    def update_user(self, user_id: int, name: str, rfid: str,
                     response_style: str, persona_gender: str, language: str) -> None:
         """Atualiza dados de um usuário existente"""
         cur = self.conn.cursor()
         cur.execute(
             "UPDATE users SET name=?, rfid=?, response_style=?, persona_gender=?, language=? WHERE id=?",
             (name, rfid, response_style, persona_gender, language, user_id),
+        )
+        self.conn.commit()
+
+    def set_user_specialization(self, user_id: int, specialization_id: Optional[int]) -> None:
+        """Define ou remove a especialização RAG de um usuário"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE users SET specialization_id=? WHERE id=?",
+            (specialization_id, user_id),
         )
         self.conn.commit()
 
@@ -268,6 +297,97 @@ class Database:
         """Remove um dado personalizado"""
         cur = self.conn.cursor()
         cur.execute("DELETE FROM user_data WHERE id=?", (data_id,))
+        self.conn.commit()
+
+    # ========== PERSONAL FACTS (memory) ==========
+
+    def store_fact(self, user_id: int, topic: str, content: str) -> int:
+        """Armazena um fato pessoal do usuário e atualiza o índice FTS5"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO user_data(user_id, key, value, created_at) VALUES (?,?,?,?)",
+            (user_id, topic, content, now_iso()),
+        )
+        row_id = cur.lastrowid
+        # Manually sync FTS index (content table trigger)
+        cur.execute(
+            "INSERT INTO user_facts_fts(rowid, topic, content) VALUES (?,?,?)",
+            (row_id, topic, content),
+        )
+        self.conn.commit()
+        return row_id
+
+    def search_facts(self, user_id: int, query: str, limit: int = 5) -> List[dict]:
+        """Busca fatos pessoais do usuário via FTS5"""
+        try:
+            cur = self.conn.cursor()
+            # FTS5 search scoped to user via JOIN
+            cur.execute(
+                """
+                SELECT ud.id, ud.key, ud.value, ud.created_at
+                FROM user_data ud
+                JOIN user_facts_fts fts ON fts.rowid = ud.id
+                WHERE ud.user_id = ?
+                  AND ud.key LIKE 'fato%'
+                  AND user_facts_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (user_id, query, limit),
+            )
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+    # ========== RAG DOCUMENTS ==========
+
+    def create_rag_document(self, name: str, source_file: str) -> int:
+        """Cria um novo documento RAG e retorna seu ID"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO rag_documents(name, source_file, chunk_count, created_at) VALUES (?,?,0,?)",
+            (name, source_file, now_iso()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def delete_rag_document(self, doc_id: int) -> None:
+        """Remove documento RAG e seus chunks (CASCADE)"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM rag_documents WHERE id=?", (doc_id,))
+        self.conn.commit()
+
+    def list_rag_documents(self) -> List[dict]:
+        """Lista todos os documentos RAG disponíveis"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, name, source_file, chunk_count, created_at FROM rag_documents ORDER BY name COLLATE NOCASE"
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def store_rag_chunk(self, document_id: int, chunk_index: int,
+                        chunk_text: str, embedding_bytes: bytes) -> None:
+        """Armazena um chunk com seu embedding"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO rag_chunks(document_id, chunk_index, chunk_text, embedding) VALUES (?,?,?,?)",
+            (document_id, chunk_index, chunk_text, embedding_bytes),
+        )
+        self.conn.commit()
+
+    def get_rag_chunks(self, document_id: int) -> List[dict]:
+        """Retorna todos os chunks de um documento"""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, chunk_index, chunk_text, embedding FROM rag_chunks WHERE document_id=? ORDER BY chunk_index",
+            (document_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def update_rag_document_chunk_count(self, doc_id: int, count: int) -> None:
+        """Atualiza o número de chunks de um documento"""
+        cur = self.conn.cursor()
+        cur.execute("UPDATE rag_documents SET chunk_count=? WHERE id=?", (count, doc_id))
         self.conn.commit()
 
     # ========== CONVERSATION HISTORY ==========

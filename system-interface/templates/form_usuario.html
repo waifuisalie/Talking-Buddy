@@ -62,6 +62,16 @@
                             <span id="language_display" class="btn-value">Selecione...</span>
                         </button>
                     </div>
+
+                    {% if especializacoes %}
+                    <div>
+                        <input type="hidden" id="specialization_id" name="specialization_id" value="{{ user.specialization_id if user and user.specialization_id else '' }}">
+                        <button type="button" class="btn btn-selection-trigger" onclick="navigateTo('/usuarios/selecionar-especializacao')">
+                            <span class="btn-label">ESPECIALIZAÇÃO</span>
+                            <span id="specialization_display" class="btn-value">Selecione...</span>
+                        </button>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
 
@@ -102,6 +112,8 @@ window.addEventListener('DOMContentLoaded', function() {
     const language = sessionStorage.getItem('language');
     const rfid = sessionStorage.getItem('rfid');
     const name = sessionStorage.getItem('name');
+    const specializationId = sessionStorage.getItem('specialization_id');
+    const specializationLabel = sessionStorage.getItem('specialization_label');
     
     // Limpa temporários antigos se não houver navegação ativa
     const tempResponseStyle = sessionStorage.getItem('temp_response_style');
@@ -156,6 +168,25 @@ window.addEventListener('DOMContentLoaded', function() {
             document.getElementById('language_display').textContent = translations[initialValue] || initialValue.toUpperCase();
         }
     }
+
+    const specEl = document.getElementById('specialization_id');
+    const specDisplay = document.getElementById('specialization_display');
+    if (specEl && specDisplay) {
+        if (specializationId !== null) {
+            specEl.value = specializationId;
+            specDisplay.textContent = specializationLabel || (specializationId ? 'SELECIONADO' : 'NENHUMA');
+            sessionStorage.removeItem('specialization_id');
+            sessionStorage.removeItem('specialization_label');
+        } else {
+            // Restore from existing user value
+            const initialSpecId = specEl.value;
+            if (initialSpecId) {
+                specDisplay.textContent = 'ESPECIALIZAÇÃO ATIVA';
+            } else {
+                specDisplay.textContent = 'NENHUMA';
+            }
+        }
+    }
     
     if (rfid) {
         document.getElementById('rfid').value = rfid;
@@ -199,6 +230,8 @@ window.addEventListener('DOMContentLoaded', function() {
             sessionStorage.setItem('temp_response_style', document.getElementById('response_style').value);
             sessionStorage.setItem('temp_persona_gender', document.getElementById('persona_gender').value);
             sessionStorage.setItem('temp_language', document.getElementById('language').value);
+            const specElNav = document.getElementById('specialization_id');
+            if (specElNav) sessionStorage.setItem('temp_specialization_id', specElNav.value);
             const rfidValue = document.getElementById('rfid').value;
             if (rfidValue) {
                 sessionStorage.setItem('temp_rfid', rfidValue);

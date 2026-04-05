@@ -13,3 +13,5 @@ onnxruntime==1.20.1
 tqdm
 scipy
 scikit-learn
+sentence-transformers>=2.2.0
+pypdf>=3.0.0

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Selecionar Especialização{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">ESPECIALIZAÇÃO DA IA</div>
+    <div class="box-content">
+        <div class="btn-grid-2col">
+            <button class="btn btn-selection" onclick="selectOption('', 'NENHUMA')">NENHUMA</button>
+            {% for doc in docs %}
+            <button class="btn btn-selection" onclick="selectOption('{{ doc.id }}', '{{ doc.name | upper }}')">
+                {{ doc.name | upper }}
+            </button>
+            {% endfor %}
+        </div>
+        <div class="btn-stack btn-stack-top-spaced">
+            <button class="btn btn-secondary" onclick="goBackToForm()">CANCELAR</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function selectOption(value, label) {
+    sessionStorage.setItem('specialization_id', value);
+    sessionStorage.setItem('specialization_label', label);
+
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+
+function goBackToForm() {
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+</script>
+{% endblock %}

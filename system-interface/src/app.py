@@ -52,6 +52,16 @@ except ImportError as e:
     OWW_AVAILABLE = False
     print(f"⚠️  OpenWakeWordManager não disponível: {e}")
 
+try:
+    from voice_assistant.rag_manager import RAGManager
+    import voice_assistant.memory_manager as memory_manager
+    RAG_AVAILABLE = True
+except ImportError as e:
+    RAGManager = None
+    memory_manager = None
+    RAG_AVAILABLE = False
+    print(f"⚠️  RAG/Memory desabilitado: {e}")
+
 WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
 DEBUG_LOGS = os.getenv('DEBUG_LOGS', 'false').lower() == 'true'
 
@@ -97,6 +107,15 @@ if not os.path.exists(DB_PATH):
     import sys
     sys.exit(1)
 
+
+# RAG manager — initialized after DB is confirmed valid
+rag_manager = None
+if RAG_AVAILABLE:
+    try:
+        rag_manager = RAGManager(DB_PATH)
+        print("✅ RAG Manager inicializado")
+    except Exception as e:
+        print(f"⚠️  RAG Manager falhou ao inicializar: {e}")
 
 # ========== GERENCIAMENTO DE BANCO (THREAD-SAFE) ==========
 
@@ -560,6 +579,71 @@ def logout():
     return redirect(url_for('index'))
 
 
+@app.route('/admin/especializacoes', methods=['GET'])
+@login_required
+def listar_especializacoes():
+    """Lista todos os documentos RAG (especializações)"""
+    docs = get_db().list_rag_documents()
+    return render_template('especializacoes.html', docs=docs)
+
+
+@app.route('/admin/especializacoes/nova', methods=['GET', 'POST'])
+@login_required
+def nova_especializacao():
+    """Formulário para criar nova especialização (upload de PDF)"""
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        pdf_file = request.files.get('pdf_file')
+
+        if not name:
+            return render_template('nova_especializacao.html', error='Nome é obrigatório.')
+        if not pdf_file or pdf_file.filename == '':
+            return render_template('nova_especializacao.html', error='Selecione um arquivo PDF.')
+        if not pdf_file.filename.lower().endswith('.pdf'):
+            return render_template('nova_especializacao.html', error='Apenas arquivos .pdf são aceitos.')
+
+        # Save PDF to data/documents/
+        docs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'documents')
+        os.makedirs(docs_dir, exist_ok=True)
+        safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in name).strip()
+        pdf_path = os.path.join(docs_dir, f"{safe_name}.pdf")
+        pdf_file.save(pdf_path)
+
+        try:
+            doc_id = get_db().create_rag_document(name, pdf_path)
+            if rag_manager:
+                chunk_count = rag_manager.index_document(pdf_path, doc_id)
+                print(f"✅ [RAG] Indexado '{name}': {chunk_count} chunks")
+            return redirect(url_for('listar_especializacoes'))
+        except Exception as e:
+            # Clean up on failure
+            try:
+                os.remove(pdf_path)
+            except Exception:
+                pass
+            return render_template('nova_especializacao.html', error=f'Erro ao indexar: {e}')
+
+    return render_template('nova_especializacao.html')
+
+
+@app.route('/admin/especializacoes/<int:doc_id>/deletar', methods=['POST'])
+@login_required
+def deletar_especializacao(doc_id):
+    """Remove uma especialização e seus chunks"""
+    get_db().delete_rag_document(doc_id)
+    if rag_manager:
+        rag_manager.reload()
+    return redirect(url_for('listar_especializacoes'))
+
+
+@app.route('/usuarios/selecionar-especializacao', methods=['GET'])
+@login_required
+def selecionar_especializacao():
+    """Tela de seleção de especialização para o formulário de usuário"""
+    docs = get_db().list_rag_documents()
+    return render_template('selecionar_especializacao.html', docs=docs)
+
+
 @app.route('/admin/alterar-senha', methods=['GET', 'POST'])
 @login_required
 def alterar_senha():
@@ -847,7 +931,14 @@ def novo_usuario():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado!'})
             
             # Adiciona usuário
-            get_db().add_user(name, rfid, response_style, persona_gender, language)
+            user_id = get_db().add_user(name, rfid, response_style, persona_gender, language)
+            # Specialization (optional)
+            spec_id = data.get('specialization_id', '').strip()
+            if spec_id:
+                try:
+                    get_db().set_user_specialization(user_id, int(spec_id))
+                except (ValueError, Exception):
+                    pass
             return jsonify({'success': True, 'message': 'Usuário cadastrado com sucesso!', 'redirect': '/usuarios/lista'})
         
         except Exception as e:
@@ -856,10 +947,11 @@ def novo_usuario():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado'})
             return jsonify({'success': False, 'message': f'Erro ao cadastrar: {error_msg}'})
     
-    return render_template('form_usuario.html', user=None, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+    return render_template('form_usuario.html', user=None,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         especializacoes=get_db().list_rag_documents())
 
 
 @app.route('/usuarios/editar/<int:user_id>', methods=['GET', 'POST'])
@@ -893,6 +985,9 @@ def editar_usuario(user_id):
             
             # Atualiza
             get_db().update_user(user_id, name, rfid, response_style, persona_gender, language)
+            # Specialization (optional, None clears it)
+            spec_id = data.get('specialization_id', '').strip()
+            get_db().set_user_specialization(user_id, int(spec_id) if spec_id else None)
             return jsonify({'success': True, 'message': 'Usuário atualizado com sucesso!', 'redirect': '/usuarios/lista'})
         
         except Exception as e:
@@ -901,10 +996,11 @@ def editar_usuario(user_id):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário'})
             return jsonify({'success': False, 'message': f'Erro ao atualizar: {error_msg}'})
     
-    return render_template('form_usuario.html', user=usuario, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+    return render_template('form_usuario.html', user=usuario,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         especializacoes=get_db().list_rag_documents())
 
 
 @app.route('/usuarios/confirmar-remocao/<int:user_id>', methods=['GET'])
@@ -1107,6 +1203,37 @@ Seja direto, objetivo e conciso."""
                 tts_thread = threading.Thread(target=tts_worker, daemon=True, name="TTSWorker")
                 tts_thread.start()
 
+                # --- Memory + RAG context injection ---
+                _context_parts = []
+
+                if not _is_anonymous and _user_id and memory_manager:
+                    try:
+                        from database import Database as _MemDB
+                        _mdb = _MemDB(_db_path)
+                        facts = memory_manager.search_facts(_user_id, _user_message, _mdb)
+                        _mdb.close()
+                        if facts:
+                            _context_parts.append(
+                                "Fatos conhecidos sobre o usuário:\n" +
+                                "\n".join(f"- {f}" for f in facts)
+                            )
+                    except Exception as _mem_err:
+                        print(f"⚠️  [Memory] Retrieval falhou: {_mem_err}")
+
+                if rag_manager and _user and _user.get('specialization_id'):
+                    try:
+                        rag_hits = rag_manager.search(_user_message, _user['specialization_id'])
+                        if rag_hits:
+                            _context_parts.append(
+                                "Contexto relevante do documento especializado:\n" +
+                                "\n\n".join(rag_hits)
+                            )
+                    except Exception as _rag_err:
+                        print(f"⚠️  [RAG] Search falhou: {_rag_err}")
+
+                if _context_parts:
+                    _system_prompt = _system_prompt + "\n\n" + "\n\n".join(_context_parts)
+
                 # Append a per-message language reminder to reinforce the system prompt.
                 # Small models (gemma3:1b) mirror the user's input language and can
                 # override the system prompt instruction — placing the reminder in the
@@ -1166,6 +1293,10 @@ Seja direto, objetivo e conciso."""
                         db_thread.close()
                     except Exception as e:
                         print(f"⚠️  [SSE] Erro ao salvar resposta: {e}")
+
+                # Async fact extraction (background thread, zero latency impact)
+                if not _is_anonymous and _user_id and memory_manager:
+                    memory_manager.store_facts_async(_user_id, _user_message, _db_path)
 
                 print(f"✅ [SSE] Pipeline completa ({len(full_response)} chars)")
 

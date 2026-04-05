@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Nova Especialização{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">NOVA ESPECIALIZAÇÃO</div>
+    <div class="box-content">
+        {% if error %}
+        <div class="error-message">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" enctype="multipart/form-data" id="specForm">
+            <div class="form-group">
+                <label for="name">NOME:</label>
+                <input type="text"
+                       id="name"
+                       name="name"
+                       class="keyboard-trigger"
+                       placeholder="Ex: Regras D&D 5e"
+                       required
+                       autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label for="pdf_file">ARQUIVO PDF:</label>
+                <input type="file"
+                       id="pdf_file"
+                       name="pdf_file"
+                       accept=".pdf"
+                       required
+                       style="color: var(--matrix-green); background: transparent; border: 1px solid var(--matrix-green); padding: 0.5rem; width: 100%; box-sizing: border-box;">
+            </div>
+
+            <div class="btn-stack btn-stack-top-spaced">
+                <button type="submit" class="btn btn-primary" id="submitBtn">INDEXAR DOCUMENTO</button>
+                <a href="{{ url_for('listar_especializacoes') }}" class="btn btn-secondary">CANCELAR</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+document.getElementById('specForm').addEventListener('submit', function() {
+    const btn = document.getElementById('submitBtn');
+    btn.textContent = 'INDEXANDO...';
+    btn.disabled = true;
+});
+</script>
+{% endblock %}

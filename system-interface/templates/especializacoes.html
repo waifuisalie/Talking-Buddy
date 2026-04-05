@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Especializações RAG{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">ESPECIALIZAÇÕES</div>
+    <div class="box-content">
+        {% if docs %}
+        <div class="user-list">
+            {% for doc in docs %}
+            <div class="user-item">
+                <div class="user-info">
+                    <strong>{{ doc.name }}</strong>
+                    <div class="user-details">
+                        <span>Chunks: {{ doc.chunk_count }}</span>
+                        <span>Criado: {{ doc.created_at[:10] }}</span>
+                    </div>
+                </div>
+                <div class="user-actions">
+                    <form method="POST" action="{{ url_for('deletar_especializacao', doc_id=doc.id) }}"
+                          onsubmit="return confirm('Remover especialização \'{{ doc.name }}\'?')">
+                        <button type="submit" class="btn btn-danger btn-small">REMOVER</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-message">
+            <p>Nenhuma especialização cadastrada</p>
+        </div>
+        {% endif %}
+
+        <div class="btn-stack btn-stack-top-spaced">
+            <a href="{{ url_for('nova_especializacao') }}" class="btn btn-primary">NOVA ESPECIALIZAÇÃO</a>
+            <a href="{{ url_for('menu_usuarios') }}" class="btn btn-secondary">VOLTAR</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
