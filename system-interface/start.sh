@@ -140,18 +140,10 @@ else
     echo -e "${GREEN}✓${NC} Dependências já instaladas"
 fi
 
-# Verificar PyAudio (necessário para reconhecimento de voz)
-if ! python3 -c "import pyaudio" 2>/dev/null; then
-    echo "🔄 Instalando PyAudio (reconhecimento de voz)..."
-    pip install pyaudio
-    echo -e "${GREEN}✓${NC} PyAudio instalado"
-fi
-
 # Verificar openWakeWord (necessário para detecção de wake word local)
+# Instalado com --no-deps pois tflite-runtime não tem wheel para aarch64
 if ! python3 -c "import openwakeword" 2>/dev/null; then
-    echo "🔄 Instalando openWakeWord e dependências (sem tflite para aarch64)..."
-    # Instala dependências manualmente (tflite-runtime não tem wheel aarch64)
-    pip install "onnxruntime==1.20.1" tqdm scipy scikit-learn --quiet
+    echo "🔄 Instalando openWakeWord (sem tflite para aarch64)..."
     pip install openwakeword --no-deps --quiet
 fi
 if python3 -c "import openwakeword" 2>/dev/null; then
@@ -160,13 +152,13 @@ else
     echo -e "${YELLOW}⚠️  openWakeWord não disponível (wake word desabilitado)${NC}"
 fi
 
-# Verificar Supertonic TTS (opcional, mas recomendado)
+# Verificar Supertonic TTS (obrigatório)
 if python3 -c "import supertonic" 2>/dev/null; then
     SUPERTONIC_AVAILABLE=true
     echo -e "${GREEN}✓${NC} Supertonic 2 TTS disponível (multilingual, 9x mais rápido)"
 else
     SUPERTONIC_AVAILABLE=false
-    echo -e "${YELLOW}⚠️  Supertonic 2 TTS não instalado (usando Piper como fallback)${NC}"
+    echo -e "${RED}❌ Supertonic 2 TTS não instalado${NC}"
     echo "   Para instalar: pip install supertonic"
 fi
 
@@ -183,12 +175,6 @@ if [ ! -f ".env" ]; then
         cp .env.example .env
         
         # Atualizar paths automaticamente
-        sed -i "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env 2>/dev/null || \
-        sed -i '' "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env 2>/dev/null
-        
-        sed -i "s|~/piper/piper/|$HOME/piper/piper/|g" .env 2>/dev/null || \
-        sed -i '' "s|~/piper/piper/|$HOME/piper/piper/|g" .env 2>/dev/null
-        
         echo -e "${GREEN}✓${NC} Arquivo .env criado"
     else
         echo -e "${YELLOW}⚠️  .env não encontrado (voz pode não funcionar)${NC}"
@@ -416,7 +402,7 @@ echo ""
 echo -e "${BLUE}Funcionalidades disponíveis:${NC}"
 echo "  • Cadastro de usuários via RFID"
 echo "  • Interface de chat com robô (animação SSE em tempo real)"
-echo "  • Integração de voz (TTS com Piper ou Supertonic)"
+echo "  • Integração de voz (TTS com Supertonic)"
 echo "  • Reconhecimento de voz (STT com Whisper + Mean VAD)"
 echo "  • Conversas com IA (Ollama + streaming)"
 echo "  • Sistema de personalidades (9 estilos de resposta)"
@@ -425,10 +411,8 @@ echo ""
 echo -e "${YELLOW}Configuração de TTS:${NC}"
 if [ "$SUPERTONIC_AVAILABLE" = true ]; then
     echo "  • Engine: Supertonic 2 (multilingual, 9x mais rápido)"
-    echo "  • Fallback: Piper (português)"
 else
-    echo "  • Engine: Piper (português)"
-    echo "  • Supertonic: Não instalado (pip install supertonic)"
+    echo "  • ⚠️  Supertonic não instalado - TTS indisponível (pip install supertonic)"
 fi
 echo ""
 echo -e "${YELLOW}Dispositivos de áudio:${NC}"

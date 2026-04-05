@@ -35,7 +35,7 @@ import atexit
 
 # Importa módulo de voz
 try:
-    from voice_assistant import (VoiceConfig, OllamaClient, TTSClient, HardwareAudioPlayer,
+    from voice_assistant import (VoiceConfig, OllamaClient, HardwareAudioPlayer,
                                   ConversationHistory, SupertonicTTSClient, SentenceDetector,
                                   StreamingTTSProcessor, PersonalityManager)
     from voice_assistant.supertonic_tts_client import PERSONALITY_VOICES
@@ -45,19 +45,12 @@ except ImportError as e:
     VOICE_ENABLED = False
     print(f"⚠️  Módulo de voz desabilitado: {e}")
 
-# Importa gerenciador de wake word (openWakeWord por padrão, ESP32 como fallback)
 try:
     from openwakeword_manager import OpenWakeWordManager
     OWW_AVAILABLE = True
 except ImportError as e:
     OWW_AVAILABLE = False
     print(f"⚠️  OpenWakeWordManager não disponível: {e}")
-
-try:
-    from esp32_manager import ESP32Manager
-    ESP32_AVAILABLE = True
-except ImportError as e:
-    ESP32_AVAILABLE = False
 
 WAKE_WORD_ENABLED = os.getenv('WAKE_WORD_ENABLED', 'true').lower() == 'true'
 DEBUG_LOGS = os.getenv('DEBUG_LOGS', 'false').lower() == 'true'
@@ -251,8 +244,7 @@ sse_manager = SSEManager()
 
 voice_config = None
 ollama_client = None
-tts_client = None
-supertonic_tts_client = None  # Supertonic TTS (optional)
+supertonic_tts_client = None
 personality_manager = None    # Personality system
 audio_player = None
 whisper_stt = None  # Whisper STT (reconhecimento de voz)
@@ -264,7 +256,7 @@ def _update_activity():
     _last_activity_time = time.time()
 
 
-# Wake Word Manager (pode ser ESP32Manager ou LocalWakeWordDetector)
+# Wake Word Manager
 wake_word_manager = None
 
 if VOICE_ENABLED:
@@ -279,8 +271,7 @@ if VOICE_ENABLED:
         
         if is_valid:
             ollama_client = OllamaClient(voice_config)
-            tts_client = TTSClient(voice_config)
-            
+
             # Inicializa Audio Player no processo correto:
             # - com reloader ativo: apenas no processo filho (WERKZEUG_RUN_MAIN=true)
             # - sem reloader (use_reloader=False): sempre inicializa
@@ -342,25 +333,18 @@ if VOICE_ENABLED:
             else:
                 print("   ⚠️  Warmup Ollama falhou - primeira resposta pode ser lenta")
             
-            # Warmup TTS
-            print("\n2️⃣  Testando sintetizador de voz...")
-            if tts_client.warmup():
-                print("   ✅ Sintetizador de voz (Piper) funcionando")
-            else:
-                print("   ⚠️  Warmup TTS (Piper) falhou - áudio pode não funcionar")
-
-            # Initialize Supertonic TTS if configured
-            if voice_config.tts_engine == 'supertonic':
-                try:
-                    supertonic_tts_client = SupertonicTTSClient(voice_config)
-                    if supertonic_tts_client.is_available():
-                        print("   ✅ Supertonic TTS disponível e configurado")
-                    else:
-                        print("   ⚠️  Supertonic TTS não disponível, usando Piper como fallback")
-                        supertonic_tts_client = None
-                except Exception as e:
-                    print(f"   ⚠️  Supertonic TTS falhou: {e}, usando Piper como fallback")
+            # Initialize Supertonic TTS
+            print("\n2️⃣  Testando sintetizador de voz (Supertonic)...")
+            try:
+                supertonic_tts_client = SupertonicTTSClient(voice_config)
+                if supertonic_tts_client.is_available():
+                    print("   ✅ Supertonic TTS disponível e configurado")
+                else:
+                    print("   ⚠️  Supertonic TTS não disponível - áudio pode não funcionar")
                     supertonic_tts_client = None
+            except Exception as e:
+                print(f"   ⚠️  Supertonic TTS falhou: {e}")
+                supertonic_tts_client = None
 
             # Verify whisper CLI binary and model are present
             print("\n3️⃣  Verificando whisper CLI...")
@@ -394,9 +378,7 @@ if VOICE_ENABLED:
 
             # Summary of TTS state
             print("\n" + "-" * 50)
-            print(f"🎤 [TTS SUMMARY] tts_engine config = '{voice_config.tts_engine}'")
-            print(f"🎤 [TTS SUMMARY] supertonic_tts_client = {'INITIALIZED' if supertonic_tts_client else 'None (FALLBACK TO PIPER)'}")
-            print(f"🎤 [TTS SUMMARY] piper tts_client = {'INITIALIZED' if tts_client else 'None'}")
+            print(f"🎤 [TTS SUMMARY] supertonic_tts_client = {'INITIALIZED' if supertonic_tts_client else 'None'}")
             print("-" * 50)
 
             print("\n" + "=" * 70)
@@ -985,7 +967,7 @@ def api_chat_send():
       response_done     — {}                       (all audio finished)
       error             — {error: "..."}
     """
-    if not VOICE_ENABLED or not ollama_client or not tts_client:
+    if not VOICE_ENABLED or not ollama_client or not supertonic_tts_client:
         return jsonify({
             'success': False,
             'error': 'Sistema de voz não disponível'
@@ -1040,13 +1022,8 @@ Seja direto, objetivo e conciso."""
         user_name = user["name"] if user else "anonymous"
         print(f"🎤 [TTS-WIRE] User='{user_name}' | personality='{_tts_personality}' | gender='{_tts_gender}' | language='{_tts_language}'")
 
-        # Select TTS engine
-        if voice_config.tts_engine == 'supertonic' and supertonic_tts_client:
-            tts = supertonic_tts_client
-            print(f"🎤 [TTS-WIRE] Engine: ✅ SUPERTONIC selected")
-        else:
-            tts = tts_client  # Piper fallback
-            print(f"🎤 [TTS-WIRE] Engine: ⚠️  PIPER fallback (config='{voice_config.tts_engine}', supertonic_client={'OK' if supertonic_tts_client else 'None'})")
+        tts = supertonic_tts_client
+        print(f"🎤 [TTS-WIRE] Engine: ✅ SUPERTONIC selected")
 
         # Resolve Ollama model name (personality model if available)
         if personality_manager and not is_anonymous:
@@ -1236,7 +1213,7 @@ def api_chat_send_sync():
     FALLBACK: Blocking chat endpoint (original behavior)
     Kept for backward compatibility during development.
     """
-    if not VOICE_ENABLED or not ollama_client or not tts_client:
+    if not VOICE_ENABLED or not ollama_client or not supertonic_tts_client:
         return jsonify({
             'success': False,
             'error': 'Sistema de voz não disponível'
@@ -1287,8 +1264,7 @@ Seja direto, objetivo e conciso."""
         if not is_anonymous and user_id:
             history_manager.add_message(user_id, 'assistant', response_text)
 
-        print(f"🎤 [TTS-WIRE/sync] ⚠️  Using PIPER (send_sync endpoint) — no personality/gender wiring!")
-        audio_url = tts_client.synthesize(response_text)
+        audio_url = supertonic_tts_client.synthesize(response_text)
 
         if not audio_url:
             user_info = {
@@ -1301,7 +1277,7 @@ Seja direto, objetivo e conciso."""
                 'audio_url': None, 'audio_duration': 0, 'tts_error': True, 'user': user_info
             })
 
-        audio_duration = tts_client._estimate_audio_duration(response_text)
+        audio_duration = supertonic_tts_client._estimate_audio_duration(response_text)
 
         if audio_player and audio_player.is_available():
             audio_file_path = os.path.join(voice_config.audio_static_dir, audio_url.replace('audio/', ''))
@@ -1466,9 +1442,9 @@ def api_voice_status():
             status['ollama_available'] = ollama_client.is_available()
             status['ollama_model'] = voice_config.ollama_model if voice_config else 'unknown'
         
-        if tts_client:
-            status['tts_available'] = tts_client.is_available()
-            status['tts_model'] = voice_config.piper_model if voice_config else 'unknown'
+        if supertonic_tts_client:
+            status['tts_available'] = supertonic_tts_client.is_available()
+            status['tts_model'] = 'supertonic'
         
         if audio_player:
             status['audio_player_available'] = audio_player.is_available()
@@ -1608,15 +1584,15 @@ def api_play_feedback(sound_name):
 @app.route('/api/wake_word_status', methods=['GET'])
 def api_wake_word_status():
     """
-    Verifica se wake word foi detectado no ESP32.
+    Verifica se wake word foi detectado (openWakeWord).
     Consumo único - flag é limpa após leitura.
-    
+
     Response JSON:
         {
             "wake_detected": true/false,
             "timestamp": "2024-02-06T12:34:56",
             "connected": true/false,
-            "mode": "esp32"
+            "mode": "openwakeword"
         }
     """
     global wake_word_manager
