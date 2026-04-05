@@ -1231,8 +1231,10 @@ Seja direto, objetivo e conciso."""
                     except Exception as _rag_err:
                         print(f"⚠️  [RAG] Search falhou: {_rag_err}")
 
-                if _context_parts:
-                    _system_prompt = _system_prompt + "\n\n" + "\n\n".join(_context_parts)
+                _effective_system_prompt = (
+                    _system_prompt + "\n\n" + "\n\n".join(_context_parts)
+                    if _context_parts else _system_prompt
+                )
 
                 # Append a per-message language reminder to reinforce the system prompt.
                 # Small models (gemma3:1b) mirror the user's input language and can
@@ -1250,7 +1252,7 @@ Seja direto, objetivo e conciso."""
                 # Stream from Ollama — no longer blocked by TTS synthesis
                 for chunk in ollama_client.generate_streaming_response(
                     prompt=_prompted_message,
-                    system_prompt=_system_prompt,
+                    system_prompt=_effective_system_prompt,
                     conversation_context=_conversation_context,
                     model=_ollama_model
                 ):
