@@ -154,9 +154,15 @@ class OpenWakeWordManager:
         imediatamente depois).
         """
         if not self.running or self._is_paused:
+            print(f"🎙️  [OWW] pause() ignorado (running={self.running}, paused={self._is_paused})")
             return
+        print("🎙️  [OWW] Pausando — aguardando microfone ser liberado...")
         self._is_paused = True
-        self._stream_released.wait(timeout=1.5)
+        released = self._stream_released.wait(timeout=1.5)
+        if released:
+            print("🎙️  [OWW] Microfone liberado com sucesso")
+        else:
+            print("⚠️  [OWW] Timeout aguardando microfone ser liberado (1.5s)")
 
     def resume(self):
         """
@@ -164,9 +170,16 @@ class OpenWakeWordManager:
         Chame depois que o Whisper STT liberar o microfone.
         """
         if not self.running:
+            print(f"🎙️  [OWW] resume() ignorado (running={self.running})")
             return
+        print("🎙️  [OWW] Retomando — aguardando SO liberar dispositivo...")
+        # Small delay so the OS/ALSA fully releases the device before OWW tries to reopen it.
+        # Without this, open_stream() can race against the caller's PyAudio.terminate()
+        # and fail with [Errno -9985] Device unavailable.
+        time.sleep(0.15)
         self._stream_released.clear()
         self._is_paused = False
+        print("🎙️  [OWW] Flag de pausa removida — loop irá reabrir microfone")
 
     # -------------------------------------------------------------------------
     # Loop de áudio / inferência
@@ -209,6 +222,7 @@ class OpenWakeWordManager:
             device_idx, device_rate = find_input_device()
             native_chunk = int(self.CHUNK * device_rate / self.RATE)
             needs_resample = device_rate != self.RATE
+            print(f"🎙️  [OWW] Abrindo microfone (device_idx={device_idx}, rate={device_rate} Hz)...")
             stream = open_stream(device_idx, device_rate, native_chunk)
             self.connected = True
             print(f"👂 [OWW] Ouvindo wake word... (mic @ {device_rate} Hz"
@@ -218,23 +232,27 @@ class OpenWakeWordManager:
                 # --- Pausa: libera mic para Whisper ---
                 if self._is_paused:
                     if stream is not None:
+                        print("🎙️  [OWW] Fechando stream do microfone para liberar ao STT...")
                         close_stream(stream)
                         stream = None
                         self.connected = False
+                        print("🎙️  [OWW] Stream fechado — sinalizando liberação")
                     self._stream_released.set()
                     while self._is_paused and self.running:
                         time.sleep(0.05)
                     if not self.running:
                         break
                     # Reabre o stream depois que Whisper liberar o mic
+                    print("🎙️  [OWW] Tentando reabrir microfone após STT...")
                     self._stream_released.clear()
                     try:
                         stream = open_stream(device_idx, device_rate, native_chunk)
                         self.connected = True
+                        print("🎙️  [OWW] Microfone reaberto com sucesso — retomando detecção")
                         if self._oww:
                             self._oww.reset()
                     except Exception as e:
-                        print(f"⚠️  [OWW] Falha ao reabrir mic: {e}")
+                        print(f"⚠️  [OWW] Falha ao reabrir mic: {e} — tentando novamente em 0.5s")
                         time.sleep(0.5)
                     continue
 

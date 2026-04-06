@@ -361,9 +361,22 @@ if VOICE_ENABLED:
                         continue
                     idle_secs = time.time() - _last_activity_time
                     if idle_secs >= 30:
-                        new_thresh = whisper_stt.calibrate_vad(duration=2.0)
-                        if new_thresh:
-                            print(f"🎚️  [VAD] Auto-recalibrado: threshold={new_thresh:.0f} (idle {idle_secs:.0f}s)")
+                        print(f"🎚️  [VAD] Iniciando recalibração (idle {idle_secs:.0f}s)...")
+                        # OWW holds the mic open — pause it before calibrating
+                        oww = wake_word_manager
+                        if oww and hasattr(oww, 'pause'):
+                            print("🎚️  [VAD] Pausando OWW para liberar microfone...")
+                            oww.pause()
+                        try:
+                            new_thresh = whisper_stt.calibrate_vad(duration=2.0)
+                            if new_thresh:
+                                print(f"🎚️  [VAD] Auto-recalibrado: threshold={new_thresh:.0f} (idle {idle_secs:.0f}s)")
+                            else:
+                                print(f"⚠️  [VAD] Recalibração falhou — threshold mantido em {whisper_stt.silence_threshold}")
+                        finally:
+                            if oww and hasattr(oww, 'resume'):
+                                print("🎚️  [VAD] Resumindo OWW após calibração")
+                                oww.resume()
 
             threading.Thread(target=_vad_recalibration_loop, daemon=True, name="VADRecalibration").start()
 
@@ -1492,14 +1505,20 @@ def api_voice_record_and_transcribe():
         temp_path = temp_file.name
         temp_file.close()
 
-        # Libera o mic para o Whisper (openWakeWord usa o mesmo dispositivo)
+        # OWW holds the mic open continuously — pause it so Whisper can open the device
         if wake_word_manager and hasattr(wake_word_manager, 'pause'):
+            print(f"🎤 [MIC] Pausando OWW para gravar com Whisper...")
             wake_word_manager.pause()
+            print(f"🎤 [MIC] OWW pausado, microfone liberado para STT")
+        else:
+            print(f"🎤 [MIC] OWW não disponível — abrindo microfone diretamente")
         try:
-            print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
+            print(f"🎤 [API] Recording with VAD (max {max_duration}s, threshold={whisper_stt.silence_threshold})...")
             speech_captured = whisper_stt.record_utterance_to_file(temp_path, max_duration=max_duration)
+            print(f"🎤 [MIC] STT finalizado — speech_captured={speech_captured}")
         finally:
             if wake_word_manager and hasattr(wake_word_manager, 'resume'):
+                print(f"🎤 [MIC] Resumindo OWW após STT...")
                 wake_word_manager.resume()
 
         if not speech_captured:

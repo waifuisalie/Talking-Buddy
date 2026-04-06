@@ -532,7 +532,9 @@ class WhisperSTT:
             if device_index is not None:
                 stream_kwargs['input_device_index'] = device_index
 
+            print(f"🎙️  [STT] Abrindo stream do microfone (device={device_index}, rate={sample_rate} Hz)...")
             stream = audio.open(**stream_kwargs)
+            print(f"🎙️  [STT] Microfone aberto com sucesso")
 
             chunks_per_second = sample_rate / chunk_size
             rms_window_size = max(3, int(0.2 * chunks_per_second))
@@ -554,14 +556,14 @@ class WhisperSTT:
             for _ in range(discard_chunks):
                 stream.read(chunk_size, exception_on_overflow=False)
 
-            print("👂 [VAD] Waiting for speech...")
+            print(f"👂 [VAD] Aguardando fala... (threshold={silence_threshold}, max={max_duration}s)")
             if self.debug_mode:
                 print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
 
             while True:
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
-                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached")
+                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached — recording={recording}, frames={len(frames)}")
                     break
 
                 audio_data = stream.read(chunk_size, exception_on_overflow=False)
@@ -597,11 +599,13 @@ class WhisperSTT:
                         print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
                         break
 
+            print(f"🎙️  [STT] Fechando stream do microfone...")
             stream.stop_stream()
             stream.close()
             stream = None
             audio.terminate()
             audio = None
+            print(f"🎙️  [STT] Stream fechado — microfone liberado")
 
             if not frames:
                 print("⚠️  [VAD] No speech detected")
@@ -657,13 +661,14 @@ class WhisperSTT:
             return None
 
         if not self._audio_lock.acquire(blocking=False):
-            print("🔧 [VAD] Calibration skipped — mic busy")
+            print("🔧 [VAD] Calibration skipped — audio lock busy (STT recording in progress?)")
             return None
 
         audio = None
         stream = None
         try:
             with _suppress_audio_init_noise():
+                print(f"🎚️  [VAD] Abrindo microfone para calibração ({duration:.1f}s)...")
                 audio = pyaudio.PyAudio()
 
             device_index = None
@@ -694,6 +699,7 @@ class WhisperSTT:
                 stream_kwargs['input_device_index'] = device_index
 
             stream = audio.open(**stream_kwargs)
+            print(f"🎚️  [VAD] Microfone aberto para calibração (device={device_index}, rate={sample_rate} Hz)")
 
             n_chunks = int(duration * sample_rate / chunk_size)
             rms_values = []
