@@ -558,8 +558,18 @@ class WhisperSTT:
             _reader_stop = threading.Event()
 
             def _audio_reader():
+                # Non-blocking: poll get_read_available() so we never block inside
+                # stream.read(). This ensures _reader_stop is checked every 5ms
+                # and stream.close() can never race with an in-progress read.
                 while not _reader_stop.is_set():
                     try:
+                        try:
+                            available = stream.get_read_available()
+                        except Exception:
+                            break
+                        if available < chunk_size:
+                            time.sleep(0.005)
+                            continue
                         data = stream.read(chunk_size, exception_on_overflow=False)
                         try:
                             _audio_queue.put_nowait(data)
