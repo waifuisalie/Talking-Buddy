@@ -12,7 +12,7 @@ from typing import Optional
 class SentenceDetector:
     """Detects sentence boundaries from streaming text chunks"""
 
-    def __init__(self, min_length: int = 30, max_length: int = 80):
+    def __init__(self, min_length: int = 30, max_length: int = 50):
         """
         Initialize sentence detector
 

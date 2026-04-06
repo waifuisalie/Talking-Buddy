@@ -560,13 +560,38 @@ class WhisperSTT:
             if self.debug_mode:
                 print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
 
+            # Run stream.read() in a background thread so a USB device stall can
+            # never block the VAD loop forever — the main loop reads from a queue
+            # with a short timeout, ensuring max_duration is always honoured.
+            _audio_queue = queue.Queue(maxsize=100)
+            _reader_stop = threading.Event()
+
+            def _audio_reader():
+                while not _reader_stop.is_set():
+                    try:
+                        data = stream.read(chunk_size, exception_on_overflow=False)
+                        _audio_queue.put(data)
+                    except Exception:
+                        break
+
+            _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
+            _reader_thread.start()
+
+            last_rms = 0.0
             while True:
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
-                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached — recording={recording}, frames={len(frames)}")
+                    print(f"⏱️  [VAD] Max duration ({max_duration}s) reached — recording={recording}, frames={len(frames)}, last_rms={last_rms:.1f}")
                     break
 
-                audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                try:
+                    audio_data = _audio_queue.get(timeout=0.3)
+                except queue.Empty:
+                    # No data for 0.3s — USB device may have stalled; log and check elapsed
+                    elapsed = time.time() - start_time
+                    print(f"⚠️  [VAD] No audio data for 0.3s (device stall?) elapsed={elapsed:.1f}s")
+                    continue
+
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
                 try:
@@ -577,6 +602,7 @@ class WhisperSTT:
 
                 rms_history.append(rms_instant)
                 rms = sum(rms_history) / len(rms_history)
+                last_rms = rms
 
                 # Periodic RMS debug output
                 if self.debug_mode:
@@ -588,7 +614,7 @@ class WhisperSTT:
 
                 if rms > silence_threshold:
                     if not recording:
-                        print("🗣️  [VAD] Speech detected, recording...")
+                        print(f"🗣️  [VAD] Speech detected, recording... (rms={rms:.1f})")
                         recording = True
                     frames.append(audio_data)
                     last_speech_time = time.time()
@@ -596,8 +622,14 @@ class WhisperSTT:
                     frames.append(audio_data)
                     silence_elapsed = time.time() - last_speech_time
                     if silence_elapsed >= silence_duration_limit:
-                        print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
+                        print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done (last_rms={rms:.1f})")
                         break
+
+            # Stop the reader thread and let the stream close flush it
+            _reader_stop.set()
+            _reader_thread.join(timeout=2.0)
+            if _reader_thread.is_alive():
+                print("⚠️  [VAD] Reader thread did not exit cleanly (device stalled) — closing stream to unblock it")
 
             print(f"🎙️  [STT] Fechando stream do microfone...")
             stream.stop_stream()
