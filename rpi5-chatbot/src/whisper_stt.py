@@ -550,13 +550,38 @@ class WhisperSTT:
             last_rms_print = 0.0
             rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
-            # Discard the first 700ms to let TTS beep sounds decay.
-            # Use the second half of that window to measure the current ambient noise
-            # floor — the calibrated threshold may be stale if the environment changed.
+            # Start the reader thread immediately so it continuously drains the
+            # ALSA buffer from the moment the stream opens. This prevents the
+            # buffer-overrun xrun that occurs when synchronous discard reads stop
+            # and there is a gap before the thread starts reading.
+            _audio_queue = queue.Queue(maxsize=500)
+            _reader_stop = threading.Event()
+
+            def _audio_reader():
+                while not _reader_stop.is_set():
+                    try:
+                        data = stream.read(chunk_size, exception_on_overflow=False)
+                        try:
+                            _audio_queue.put_nowait(data)
+                        except queue.Full:
+                            pass  # Drop frame if queue is full during discard
+                    except Exception as e:
+                        print(f"⚠️  [VAD] Reader error: {e}")
+                        break
+
+            _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
+            _reader_thread.start()
+
+            # Discard the first 700ms consuming from the queue (not stream.read()
+            # directly) so there is no gap that could cause an ALSA xrun.
+            # Use the second half to measure current ambient noise floor.
             discard_chunks = int(0.7 * sample_rate / chunk_size)
             fresh_rms_samples = []
             for i in range(discard_chunks):
-                data = stream.read(chunk_size, exception_on_overflow=False)
+                try:
+                    data = _audio_queue.get(timeout=1.0)
+                except queue.Empty:
+                    break  # Device issue during discard — proceed anyway
                 if i >= discard_chunks // 2:  # sample last ~350ms (beep has decayed)
                     arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
                     rms_sq = np.mean(arr ** 2)
@@ -576,23 +601,6 @@ class WhisperSTT:
             print(f"👂 [VAD] Aguardando fala... (threshold={silence_threshold}, max={max_duration}s)")
             if self.debug_mode:
                 print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
-
-            # Run stream.read() in a background thread so a USB device stall can
-            # never block the VAD loop forever — the main loop reads from a queue
-            # with a short timeout, ensuring max_duration is always honoured.
-            _audio_queue = queue.Queue(maxsize=100)
-            _reader_stop = threading.Event()
-
-            def _audio_reader():
-                while not _reader_stop.is_set():
-                    try:
-                        data = stream.read(chunk_size, exception_on_overflow=False)
-                        _audio_queue.put(data)
-                    except Exception:
-                        break
-
-            _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
-            _reader_thread.start()
 
             last_rms = 0.0
             while True:
@@ -642,14 +650,15 @@ class WhisperSTT:
                         print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done (last_rms={rms:.1f})")
                         break
 
-            # Stop the reader thread and let the stream close flush it
+            # Stop the reader thread: stop_stream() first to unblock stream.read(),
+            # then join, then close. Wrong order (join before stop_stream) causes
+            # the reader to block in stream.read() forever → heap corruption on close.
             _reader_stop.set()
-            _reader_thread.join(timeout=2.0)
-            if _reader_thread.is_alive():
-                print("⚠️  [VAD] Reader thread did not exit cleanly (device stalled) — closing stream to unblock it")
-
             print(f"🎙️  [STT] Fechando stream do microfone...")
             stream.stop_stream()
+            _reader_thread.join(timeout=2.0)
+            if _reader_thread.is_alive():
+                print("⚠️  [VAD] Reader thread did not exit cleanly after stop_stream()")
             stream.close()
             stream = None
             audio.terminate()
@@ -681,9 +690,18 @@ class WhisperSTT:
             print(f"❌ [VAD] Error during recording: {e}")
             return False
         finally:
+            # Unblock reader thread before closing stream to avoid heap corruption
+            if '_reader_stop' in locals():
+                _reader_stop.set()
+            if '_reader_thread' in locals() and _reader_thread.is_alive():
+                if stream:
+                    try:
+                        stream.stop_stream()
+                    except Exception:
+                        pass
+                _reader_thread.join(timeout=2.0)
             if stream:
                 try:
-                    stream.stop_stream()
                     stream.close()
                 except Exception:
                     pass
