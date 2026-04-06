@@ -1005,7 +1005,7 @@ Seja direto, objetivo e conciso."""
             history_manager = ConversationHistory(db)
             history_manager.add_message(user_id, 'user', user_message)
             conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
-            system_prompt = _build_system_prompt(user)
+            system_prompt = None  # Modelfile already has the personality system prompt baked in
 
         # --- Create SSE session ---
         session_id = sse_manager.create_session()
@@ -1248,7 +1248,7 @@ Seja direto, objetivo e conciso."""
             history_manager = ConversationHistory(db)
             history_manager.add_message(user_id, 'user', user_message)
             conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
-            system_prompt = _build_system_prompt(user)
+            system_prompt = None  # Modelfile already has the personality system prompt baked in
 
         user_name = user['name'] if user else 'Visitante'
         print(f"🤖 [API/sync] Gerando resposta para {user_name}...")
@@ -1621,63 +1621,6 @@ RESPONSE_STYLE_TO_PERSONALITY = {
     'casual (chatty)': 'casual',
 }
 
-
-def _localize_system_prompt(prompt: str, language_code: str) -> str:
-    """
-    Appends the appropriate language instruction to a personality prompt
-    based on the user's chosen language.
-    """
-    LANGUAGE_INSTRUCTIONS = {
-        'pt-BR': 'Sempre responda em português brasileiro, independentemente do idioma da pergunta.',
-        'en-US': 'Always respond in English, regardless of the language of the question.',
-        'es-ES': 'Siempre responde en español, independientemente del idioma de la pregunta.',
-    }
-    instruction = LANGUAGE_INSTRUCTIONS.get(language_code, LANGUAGE_INSTRUCTIONS['pt-BR'])
-    return prompt.rstrip() + ' ' + instruction
-
-
-def _build_system_prompt(user) -> str:
-    """
-    Constrói system prompt baseado nas preferências do usuário.
-    Uses personality system if available, falls back to hardcoded prompts.
-
-    Args:
-        user: Row do banco com dados do usuário
-
-    Returns:
-        System prompt customizado
-    """
-    # Try personality system first
-    personality_id = RESPONSE_STYLE_TO_PERSONALITY.get(user['response_style'], 'neutral')
-
-    if personality_manager:
-        personality = personality_manager.get_personality(personality_id)
-        if personality and 'system_prompt' in personality:
-            prompt = personality['system_prompt'].strip()
-            return _localize_system_prompt(prompt, user['language'])
-
-    # Fallback: hardcoded prompts (same as before)
-    style_instructions = {
-        'short (objective)': 'Seja breve e objetivo. Respostas curtas e diretas.',
-        'neutral (balanced)': 'Mantenha equilíbrio entre brevidade e explicação.',
-        'detailed (explanatory)': 'Forneça explicações detalhadas e completas.',
-        'formal (business)': 'Use linguagem formal e profissional.',
-        'casual (chatty)': 'Use linguagem casual e amigável, como em uma conversa.'
-    }
-
-    language_map = {
-        'pt-BR': 'português brasileiro',
-        'en-US': 'inglês',
-        'es-ES': 'espanhol'
-    }
-
-    style = style_instructions.get(user['response_style'], style_instructions['neutral (balanced)'])
-    language = language_map.get(user['language'], 'português brasileiro')
-
-    return f"""Você é um assistente virtual útil e prestativo.
-Sempre responda em {language}.
-{style}
-Seja natural e mantenha o contexto da conversa."""
 
 
 def _resolve_personality_for_user(user) -> str:
