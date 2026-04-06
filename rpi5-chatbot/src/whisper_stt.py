@@ -550,11 +550,28 @@ class WhisperSTT:
             last_rms_print = 0.0
             rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
-            # Discard the first 700ms of audio to let any feedback sounds (e.g.
-            # chat_open beep) decay before VAD starts listening.
+            # Discard the first 700ms to let TTS beep sounds decay.
+            # Use the second half of that window to measure the current ambient noise
+            # floor — the calibrated threshold may be stale if the environment changed.
             discard_chunks = int(0.7 * sample_rate / chunk_size)
-            for _ in range(discard_chunks):
-                stream.read(chunk_size, exception_on_overflow=False)
+            fresh_rms_samples = []
+            for i in range(discard_chunks):
+                data = stream.read(chunk_size, exception_on_overflow=False)
+                if i >= discard_chunks // 2:  # sample last ~350ms (beep has decayed)
+                    arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                    rms_sq = np.mean(arr ** 2)
+                    if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                        fresh_rms_samples.append(np.sqrt(rms_sq))
+
+            if fresh_rms_samples:
+                fresh_ambient = float(np.mean(fresh_rms_samples))
+                dynamic_threshold = int(fresh_ambient * 1.3)
+                if dynamic_threshold > silence_threshold:
+                    print(f"🎚️  [VAD] Ambiente mais barulhento que o calibrado: "
+                          f"ambient={fresh_ambient:.1f} → threshold {silence_threshold} → {dynamic_threshold}")
+                    silence_threshold = dynamic_threshold
+                else:
+                    print(f"🎚️  [VAD] Ambiente nominal: ambient={fresh_ambient:.1f}, threshold={silence_threshold}")
 
             print(f"👂 [VAD] Aguardando fala... (threshold={silence_threshold}, max={max_duration}s)")
             if self.debug_mode:
