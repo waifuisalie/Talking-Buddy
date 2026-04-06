@@ -362,11 +362,17 @@ if VOICE_ENABLED:
                     idle_secs = time.time() - _last_activity_time
                     if idle_secs >= 30:
                         print(f"🎚️  [VAD] Iniciando recalibração (idle {idle_secs:.0f}s)...")
-                        # OWW holds the mic open — pause it before calibrating
                         oww = wake_word_manager
-                        if oww and hasattr(oww, 'pause'):
+                        # Only pause OWW if it is currently active (not already paused by STT).
+                        # If STT already paused it, we must NOT call resume() afterwards — that
+                        # would prematurely unblock OWW while the mic is still held by STT.
+                        we_paused_oww = False
+                        if oww and hasattr(oww, 'pause') and oww.running and not oww._is_paused:
                             print("🎚️  [VAD] Pausando OWW para liberar microfone...")
                             oww.pause()
+                            we_paused_oww = True
+                        elif oww and oww._is_paused:
+                            print("🎚️  [VAD] OWW já pausado (STT em andamento) — pulando calibração")
                         try:
                             new_thresh = whisper_stt.calibrate_vad(duration=2.0)
                             if new_thresh:
@@ -374,7 +380,7 @@ if VOICE_ENABLED:
                             else:
                                 print(f"⚠️  [VAD] Recalibração falhou — threshold mantido em {whisper_stt.silence_threshold}")
                         finally:
-                            if oww and hasattr(oww, 'resume'):
+                            if we_paused_oww and oww and hasattr(oww, 'resume'):
                                 print("🎚️  [VAD] Resumindo OWW após calibração")
                                 oww.resume()
 

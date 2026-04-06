@@ -257,6 +257,10 @@ class OpenWakeWordManager:
                     continue
 
                 # --- Inferência ---
+                if stream is None:
+                    # Stream failed to reopen after a pause — retry on next iteration
+                    time.sleep(0.1)
+                    continue
                 try:
                     audio_data = stream.read(native_chunk, exception_on_overflow=False)
                 except OSError as e:
