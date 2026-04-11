@@ -254,11 +254,10 @@ class ChatManager {
             }, 100);
         });
 
-        // Robot click area - ativa chat quando clica no robô
+        // Robot click area - abre o chat se fechado, fecha se ja estiver aberto
         const robotClickArea = document.getElementById('robot-click-area');
         if (robotClickArea) {
             robotClickArea.addEventListener('click', (e) => {
-                // SEMPRE permite abrir chat ao clicar no robô
                 if (!this.chatActive) {
                     console.log('🤖 Robô clicado! Abrindo chat...');
                     this.showChatInterface();
@@ -267,8 +266,12 @@ class ChatManager {
                             this.inputField.focus();
                         }
                     }, 100);
-                    e.stopPropagation();
+                } else {
+                    // Chat ja esta aberto: clique na cara do robo (fora do painel) fecha
+                    console.log('🤖 Robô clicado com chat aberto — fechando chat');
+                    this.closeChatInterface();
                 }
+                e.stopPropagation();
             });
         }
     }
@@ -463,7 +466,11 @@ class ChatManager {
         // Cria div para a resposta (vazia inicialmente)
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble message-bubble-ai';
-        messageDiv.innerHTML = '<em class="thinking-indicator">🧠 Pensando...</em>';
+        const thinkingLabel = (window.i18n && typeof window.i18n.t === 'function')
+            ? window.i18n.t('messages.thinking')
+            : 'Pensando...';
+        messageDiv.innerHTML = '<em class="thinking-indicator"></em>';
+        messageDiv.querySelector('.thinking-indicator').textContent = thinkingLabel;
         this.messagesContainer.appendChild(messageDiv);
         this.scrollToBottom();
 
@@ -506,19 +513,21 @@ class ChatManager {
             // --- SSE Event Handlers ---
 
             eventSource.addEventListener('text_chunk', (e) => {
-                const { text } = JSON.parse(e.data);
-
-                // Clear "Pensando..." on first chunk but don't show text yet.
-                // Text is displayed in sync with audio via sentence_playing below.
-                if (!thinkingCleared) {
-                    messageDiv.innerHTML = '';
-                    thinkingCleared = true;
-                }
+                // NAO limpar o balao "Pensando..." aqui — o LLM gera tokens muito antes
+                // do TTS sintetizar e do audio comecar a tocar. Limpar agora deixaria
+                // um balao vazio na tela por 1-3s. A limpeza real acontece no
+                // sentence_playing, quando o audio realmente comeca.
             });
 
             eventSource.addEventListener('sentence_playing', (e) => {
                 const { text, index } = JSON.parse(e.data);
                 console.log(`🔊 [SSE] Sentence ${index} playing on hardware: ${text.substring(0, 50)}...`);
+
+                // Limpa o balao "Pensando..." na primeira frase tocada
+                if (!thinkingCleared) {
+                    messageDiv.innerHTML = '';
+                    thinkingCleared = true;
+                }
 
                 // Show sentence text in sync with hardware audio playback
                 messageDiv.textContent += (messageDiv.textContent ? ' ' : '') + text;
@@ -535,11 +544,11 @@ class ChatManager {
             });
 
             eventSource.addEventListener('sentence_done', (e) => {
-                // A sentence finished playing on hardware — stop mouth animation
-                // until the next sentence_playing event arrives.
+                // A sentence finished playing on hardware
+                // Clear the text but keep speaking state - next sentence will arrive soon
+                // Only response_done should stop speaking entirely
                 if (window.robotAvatar) {
-                    window.robotAvatar.stopSpeaking();
-                    isSpeaking = false;
+                    window.robotAvatar.clearSpeakingText();
                 }
             });
 
@@ -901,9 +910,9 @@ class ChatManager {
                         console.error('\u274c RFID poll error:', error);
                     }
                 });
-        }, 3000); // 3 segundos - reduz carga no servidor
-        
-        console.log('RFID polling configurado (intervalo: 3s - otimizado para Raspberry Pi)');
+        }, 1500); // 1.5s — equilibrio entre velocidade de deteccao e CPU no Pi
+
+        console.log('RFID polling configurado (intervalo: 1.5s - equilibrio velocidade/CPU)');
     }
     
     // ========== WAKE WORD POLLING (ESP32) ==========
@@ -1141,7 +1150,11 @@ class ChatManager {
         if (this.userGreeting) {
             this.userGreeting.classList.remove('hidden');
         }
-        
+
+        // Empurra a bateria para baixo enquanto o user-greeting estiver visivel
+        const batteryEl = document.getElementById('battery-indicator');
+        if (batteryEl) batteryEl.classList.add('user-logged');
+
         // Iniciar timer de inatividade do usuário
         this.resetUserInactivityTimer();
     }
@@ -1446,6 +1459,9 @@ class ChatManager {
         console.log('  Usuário:', this.currentUser.name);
         console.log('  RFID:', this.currentUser.rfid);
         
+        // Tocar som de logout
+        this.playFeedbackSound('logout');
+        
         // Salvar histórico antes de fazer logout
         if (this.currentUser.rfid) {
             this.saveUserHistory();
@@ -1470,6 +1486,17 @@ class ChatManager {
         if (this.userGreeting) {
             this.userGreeting.classList.add('hidden');
             console.log('✅ [logout] Greeting escondido');
+        }
+
+        // Bateria volta para o topo
+        const batteryEl = document.getElementById('battery-indicator');
+        if (batteryEl) batteryEl.classList.remove('user-logged');
+        
+        // 🌐 Resetar idioma para pt-BR (padrão do sistema)
+        if (window.i18n) {
+            console.log('🌐 [logout] Resetando idioma para pt-BR');
+            window.i18n.setLanguage('pt-BR');
+            this.updateI18nElements();
         }
         
         // Limpar timer de inatividade

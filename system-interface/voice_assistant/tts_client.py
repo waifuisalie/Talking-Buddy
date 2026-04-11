@@ -84,6 +84,9 @@ class TTSClient:
             elapsed = time.time() - start_time
             
             if process.returncode == 0 and output_path.exists():
+                # Normalizar volume do áudio para consistência com sons do sistema
+                self._normalize_audio(output_path)
+                
                 # Retorna path relativo para servir via Flask
                 relative_path = f"audio/{output_filename}"
                 self.temp_files.append(str(output_path))
@@ -105,6 +108,34 @@ class TTSClient:
         except Exception as e:
             print(f"❌ [TTS] Erro: {e}")
             return None
+    
+    def _normalize_audio(self, audio_path: Path, target_db: float = -6.0):
+        """
+        Normaliza volume do áudio TTS para consistência com sons do sistema.
+        
+        Args:
+            audio_path: Caminho do arquivo de áudio
+            target_db: Nível de pico alvo em dB (padrão: -6dB)
+        """
+        try:
+            # Usar sox para normalização rápida
+            temp_path = audio_path.with_suffix('.norm.wav')
+            result = subprocess.run(
+                ['sox', str(audio_path), str(temp_path), 'norm', str(target_db)],
+                capture_output=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0 and temp_path.exists():
+                # Substituir arquivo original
+                temp_path.replace(audio_path)
+            else:
+                # Se falhar, manter original
+                if temp_path.exists():
+                    temp_path.unlink()
+                    
+        except Exception as e:
+            print(f"⚠️  [TTS] Normalização falhou (ignorando): {e}")
     
     def _clean_text_for_tts(self, text: str) -> str:
         """Limpa texto para melhor pronúncia no TTS"""

@@ -11,3 +11,5 @@ PyYAML>=6.0.0
 rpi-lgpio>=0.2
 spidev>=3.5
 faster-whisper>=1.0.0
+smbus2>=0.4.0
+gpiod>=2.0.0

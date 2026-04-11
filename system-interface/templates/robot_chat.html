@@ -68,9 +68,29 @@
 </div>
 {% endblock %}
 
+{% block battery_indicator %}
+<!-- Battery Indicator: aparece somente na tela do robo, canto superior direito -->
+<div id="battery-indicator" class="battery-indicator hidden">
+    <svg class="battery-svg" viewBox="0 0 29 15">
+        <rect x="1.5" y="1.5" width="22" height="12" rx="2" ry="2"
+              fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="23.5" y="4.5" width="3" height="6" rx="1" ry="1"
+              fill="currentColor"/>
+        <rect id="battery-fill" x="3.5" y="3.5" width="18" height="8" rx="1"
+              fill="currentColor" opacity="0.8"/>
+    </svg>
+    <svg id="battery-charging" class="battery-charging hidden" viewBox="0 0 12 18">
+        <path d="M7 0L0 10h5l-2 8 9-12H7z" fill="currentColor"/>
+    </svg>
+    <span id="battery-pct" class="battery-text">--%</span>
+    <span id="battery-warn" class="battery-warn hidden">!</span>
+</div>
+{% endblock %}
+
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<!-- i18n.js ja vem do base.html -->
 <script src="{{ url_for('static', filename='js/robot_animation.js') }}"></script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/battery.js') }}"></script>
 <!-- Robot avatar é inicializado automaticamente pelo robot_animation.js -->
 {% endblock %}

@@ -12,7 +12,7 @@ class BatteryMonitor:
     I2C_ADDR = 0x36
     GPIO_CHIP = '/dev/gpiochip4'
     GPIO_AC_LINE = 6
-    CACHE_TTL = 5  # seconds
+    CACHE_TTL = 2  # seconds
 
     def __init__(self):
         import smbus2

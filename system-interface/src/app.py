@@ -322,6 +322,7 @@ if VOICE_ENABLED:
                     # Cria configuração compatível
                     whisper_config = rpi5_config.WhisperConfig()
                     whisper_config.capture_device_name = voice_config.microphone_device
+                    whisper_config.capture_device = -1  # avoid stale PyAudio index fallback
                     whisper_config.model_path = os.path.join(voice_config.whisper_model_path, voice_config.whisper_model)
                     whisper_config.cli_binary = voice_config.whisper_binary
                     whisper_config.language = voice_config.whisper_language
@@ -1774,4 +1775,3 @@ if __name__ == '__main__':
         port=5000,
         threaded=True
     )
-

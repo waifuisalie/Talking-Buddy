@@ -43,7 +43,8 @@ const i18n = (function() {
             // Mensagens
             messages: {
                 welcome_no_name: 'Olá! Sou seu assistente virtual. Como posso ajudá-lo(a) hoje?',
-                welcome_with_name: 'Olá, {name}!\n\nSou seu assistente virtual. Como posso ajudá-lo(a) hoje?'
+                welcome_with_name: 'Olá, {name}!\n\nSou seu assistente virtual. Como posso ajudá-lo(a) hoje?',
+                thinking: 'Pensando...'
             },
             
             // Teclado Virtual
@@ -90,7 +91,8 @@ const i18n = (function() {
             // Messages
             messages: {
                 welcome_no_name: 'Hello! I\'m your virtual assistant. How can I help you today?',
-                welcome_with_name: 'Hello, {name}!\n\nI\'m your virtual assistant. How can I help you today?'
+                welcome_with_name: 'Hello, {name}!\n\nI\'m your virtual assistant. How can I help you today?',
+                thinking: 'Thinking...'
             },
             
             // Virtual Keyboard
@@ -137,7 +139,8 @@ const i18n = (function() {
             // Mensajes
             messages: {
                 welcome_no_name: '¡Hola! Soy tu asistente virtual. ¿Cómo puedo ayudarte hoy?',
-                welcome_with_name: '¡Hola, {name}!\n\nSoy tu asistente virtual. ¿Cómo puedo ayudarte hoy?'
+                welcome_with_name: '¡Hola, {name}!\n\nSoy tu asistente virtual. ¿Cómo puedo ayudarte hoy?',
+                thinking: 'Pensando...'
             },
             
             // Teclado Virtual

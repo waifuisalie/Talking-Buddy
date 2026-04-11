@@ -2,7 +2,7 @@
  * Battery indicator - polls /api/system/battery and updates UI.
  */
 (function () {
-    const POLL_INTERVAL = 15000;
+    const POLL_INTERVAL = 5000;
     const FETCH_TIMEOUT = 5000;
     const FILL_MAX_WIDTH = 18;
     const STATE_CLASSES = ['battery-normal', 'battery-medium', 'battery-low', 'battery-critical', 'battery-charging'];
@@ -108,7 +108,22 @@
         if (el.indicator) el.indicator.classList.add('hidden');
     }
 
+    function showLoadingState() {
+        // Mostra o widget imediatamente em estado neutro para evitar "pop-in"
+        // depois da primeira fetch. Se a bateria nao estiver disponivel,
+        // disableBattery() vai esconder de volta logo em seguida.
+        var el = getElements();
+        if (!el.indicator) return;
+        el.indicator.classList.remove('hidden');
+        el.indicator.classList.add('battery-loading', 'battery-normal');
+        if (el.pct) el.pct.textContent = '--%';
+        if (el.fill) el.fill.setAttribute('width', FILL_MAX_WIDTH);
+    }
+
     function init() {
+        // Aparece imediatamente em estado de loading
+        showLoadingState();
+
         var controller = new AbortController();
         var timeout = setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT);
 
@@ -116,6 +131,8 @@
             .then(function (res) { return res.json(); })
             .then(function (data) {
                 clearTimeout(timeout);
+                var el = getElements();
+                if (el.indicator) el.indicator.classList.remove('battery-loading');
                 if (data.available) {
                     updateUI(data);
                     pollTimer = setInterval(fetchBattery, POLL_INTERVAL);
@@ -125,6 +142,8 @@
             })
             .catch(function () {
                 clearTimeout(timeout);
+                var el = getElements();
+                if (el.indicator) el.indicator.classList.remove('battery-loading');
                 disableBattery();
             });
     }

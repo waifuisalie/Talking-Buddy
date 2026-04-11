@@ -233,7 +233,27 @@ document.getElementById('userForm').addEventListener('submit', function(e) {
         if (result.success) {
             // Limpa todo o sessionStorage para resetar o formulário na próxima entrada
             sessionStorage.clear();
-            window.location.href = "{{ url_for('menu_usuarios') }}";
+
+            // Mostra popup de sucesso e so redireciona quando o usuario clicar OK
+            const isEdit = {{ 'true' if user else 'false' }};
+            const successMsg = isEdit
+                ? 'Usuario atualizado com sucesso!'
+                : 'Usuario cadastrado com sucesso!';
+            showPopup(successMsg);
+
+            // Sobrescreve o handler do botao OK do popup para redirecionar
+            const popupBtn = document.querySelector('#custom-popup .custom-popup-btn');
+            if (popupBtn) {
+                popupBtn.onclick = function () {
+                    closePopup();
+                    window.location.href = "{{ url_for('menu_usuarios') }}";
+                };
+            } else {
+                // Fallback caso o botao nao exista
+                setTimeout(function () {
+                    window.location.href = "{{ url_for('menu_usuarios') }}";
+                }, 1500);
+            }
         } else {
             alert(result.message || 'Erro ao salvar usuario');
         }

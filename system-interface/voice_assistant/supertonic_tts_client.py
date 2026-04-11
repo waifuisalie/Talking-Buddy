@@ -115,6 +115,9 @@ class SupertonicTTSClient:
             self.tts.save_audio(wav_array, output_file)
 
             if Path(output_file).exists():
+                # Normalizar volume para consistência com sons do sistema
+                self._normalize_audio(Path(output_file))
+                
                 self.temp_files.append(output_file)
                 print(f"✅ Speech generated: {output_file} ({float(duration[0]):.2f}s)")
                 return output_file
@@ -175,6 +178,31 @@ class SupertonicTTSClient:
             text += '.'
 
         return text
+
+    def _normalize_audio(self, audio_path: Path, target_db: float = -6.0):
+        """
+        Normaliza volume do áudio TTS para consistência com sons do sistema.
+        
+        Args:
+            audio_path: Caminho do arquivo de áudio
+            target_db: Nível de pico alvo em dB (padrão: -6dB)
+        """
+        import subprocess
+        try:
+            temp_path = audio_path.with_suffix('.norm.wav')
+            result = subprocess.run(
+                ['sox', str(audio_path), str(temp_path), 'norm', str(target_db)],
+                capture_output=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0 and temp_path.exists():
+                temp_path.replace(audio_path)
+            else:
+                if temp_path.exists():
+                    temp_path.unlink()
+        except Exception as e:
+            print(f"⚠️  [TTS] Normalização falhou (ignorando): {e}")
 
     def is_available(self) -> bool:
         """Check if Supertonic TTS is available"""

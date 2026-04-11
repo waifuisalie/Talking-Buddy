@@ -319,10 +319,11 @@ class AudioDeviceDetector:
         Calculate priority score for output device
 
         Scoring (highest to lowest):
+        - HDMI 1 audio (vc4hdmi1): 900 (highest - for HDMI audio extractor)
         - HiFiBerry DAC: 850
         - USB speakers/DAC: 700
         - 3.5mm headphone jack: 600
-        - HDMI audio: 500
+        - HDMI 0 audio: 500
         - PulseAudio virtual devices: 50 (deprioritized)
         - System default: 100
 
@@ -338,7 +339,11 @@ class AudioDeviceDetector:
         if self._is_pulseaudio_device(device):
             return 50
 
-        # HiFiBerry DAC (highest priority)
+        # HDMI 1 audio (highest priority - for HDMI audio extractor)
+        if 'vc4hdmi1' in name_lower or 'vc4-hdmi-1' in name_lower or 'hdmi1' in name_lower:
+            return 900
+
+        # HiFiBerry DAC
         if 'hifiberry' in name_lower or 'sndrpihifiberry' in name_lower:
             return 850
 
@@ -350,7 +355,7 @@ class AudioDeviceDetector:
         if 'headphones' in name_lower or 'bcm2835' in name_lower:
             return 600
 
-        # HDMI audio
+        # HDMI 0 audio (lower priority than HDMI 1)
         if 'hdmi' in name_lower or 'vc4-hdmi' in name_lower:
             return 500
 

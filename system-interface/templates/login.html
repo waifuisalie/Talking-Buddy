@@ -14,26 +14,28 @@
     <div class="box-header">SISTEMA DE CADASTRO DE USUARIOS</div>
     
     <div class="box-content">
-        <form id="login-form" method="POST" action="/login">
+        <form id="login-form" method="POST" action="/login" autocomplete="off">
             <div class="form-group form-group-spaced">
                 <label class="form-label" for="username">Usuário:</label>
-                <input 
-                    type="text" 
-                    id="username" 
-                    name="username" 
-                    class="form-input keyboard-trigger" 
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    class="form-input keyboard-trigger"
+                    autocomplete="off"
                     readonly
                     required
                 >
             </div>
-            
+
             <div class="form-group form-group-spaced">
                 <label class="form-label" for="password">Senha:</label>
-                <input 
-                    type="password" 
-                    id="password" 
-                    name="password" 
-                    class="form-input keyboard-trigger" 
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    class="form-input keyboard-trigger"
+                    autocomplete="new-password"
                     readonly
                     required
                 >

@@ -26,11 +26,11 @@ class VoiceConfig:
     piper_model_path: str = os.path.expanduser("~/piper/piper/")
     
     # Audio Output (hardware)
-    audio_device: str = "default"  # ALSA device (default, hw:0,0, plughw:0,0, etc)
+    audio_device: str = "plughw:CARD=vc4hdmi1,DEV=0"  # HDMI 1 output (for audio extractor)
     audio_sample_rate: int = 22050
     
     # Audio Input (microfone USB)
-    microphone_device: str = "plughw:2,0"  # ALSA device para microfone
+    microphone_device: str = "plughw:CARD=Device,DEV=0"  # ALSA device para microfone (estável)
     microphone_sample_rate: int = 16000  # Whisper usa 16kHz
     
     # Diretórios
@@ -68,8 +68,8 @@ class VoiceConfig:
             piper_model=os.getenv('PIPER_MODEL', 'pt_BR-faber-medium.onnx'),
             piper_model_path=os.path.expanduser(os.getenv('PIPER_MODEL_PATH', '~/piper/piper/')),
             # Audio devices
-            audio_device=os.getenv('AUDIO_DEVICE', 'plughw:3,0'),  # USB Audio por padrão
-            microphone_device=os.getenv('MICROPHONE_DEVICE', 'plughw:2,0'),
+            audio_device=os.getenv('AUDIO_DEVICE', 'plughw:CARD=vc4hdmi1,DEV=0'),  # HDMI 1 output
+            microphone_device=os.getenv('MICROPHONE_DEVICE', 'plughw:CARD=Device,DEV=0'),
             # Whisper STT
             whisper_enabled=os.getenv('WHISPER_ENABLED', 'false').lower() == 'true',
             whisper_binary=os.path.expanduser(os.getenv('WHISPER_BINARY', '~/whisper.cpp/build/bin/main')),
@@ -111,4 +111,3 @@ class VoiceConfig:
                 errors.append(f"Erro ao criar diretório de áudio: {e}")
         
         return (len(errors) == 0, errors)
-

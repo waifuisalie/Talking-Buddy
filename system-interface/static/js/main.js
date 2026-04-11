@@ -303,7 +303,8 @@ function updateKeyboardDisplay() {
 
 function updateKeyboardTitle(inputElement) {
     const titleElement = document.getElementById('keyboard-title');
-    
+    if (!titleElement) return;
+
     // 🌐 Mapeamento de campos para chaves de tradução i18n
     const fieldI18nKeys = {
         'username': 'keyboard.title_username',
@@ -314,17 +315,29 @@ function updateKeyboardTitle(inputElement) {
         'name': 'keyboard.title_name',
         'rfid': 'keyboard.title_rfid'
     };
-    
+
+    // Fallback estatico (PT-BR) caso i18n nao esteja carregado
+    const fallbackTitles = {
+        'keyboard.title_username': 'Digite seu usuário administrador',
+        'keyboard.title_password': 'Digite sua senha administradora',
+        'keyboard.title_name': 'Digite o nome do usuário',
+        'keyboard.title_rfid': 'Digite o RFID',
+        'keyboard.title_default': 'Digite:'
+    };
+
     // Verifica se há mensagem personalizada para este campo
-    let i18nKey = fieldI18nKeys[inputElement.id] || fieldI18nKeys[inputElement.name];
-    
-    if (i18nKey) {
-        // Usa tradução específica
-        titleElement.textContent = window.i18n.t(i18nKey);
-    } else {
-        // Fallback: usa título padrão
-        titleElement.textContent = window.i18n.t('keyboard.title_default');
+    const i18nKey = fieldI18nKeys[inputElement.id] || fieldI18nKeys[inputElement.name] || 'keyboard.title_default';
+
+    let translated;
+    try {
+        if (window.i18n && typeof window.i18n.t === 'function') {
+            translated = window.i18n.t(i18nKey);
+        }
+    } catch (err) {
+        console.warn('[Keyboard] i18n.t falhou, usando fallback:', err);
     }
+
+    titleElement.textContent = translated || fallbackTitles[i18nKey] || 'Digite:';
 }
 
 

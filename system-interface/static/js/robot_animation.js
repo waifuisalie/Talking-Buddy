@@ -233,6 +233,7 @@ class RobotAvatar {
     speakText(text) {
         this.currentSpeakingText = text;
         this.speakingCharIndex = 0;
+        this.mouthFrame = 0; // Reset frame counter para sincronização correta
         this.state = 'speaking';
         this.faceExpression = 'speaking';
         this.resetInactivityTimer();
@@ -246,6 +247,13 @@ class RobotAvatar {
             this.state = 'idle';
             this.faceExpression = 'happy';
         }
+    }
+    
+    // Limpa o texto atual mas mantém o estado speaking (para transições entre frases)
+    clearSpeakingText() {
+        this.currentSpeakingText = '';
+        this.speakingCharIndex = 0;
+        // Não muda estado nem targetMouthOpenness - a animação fallback vai continuar
     }
     
     animate() {
@@ -477,28 +485,35 @@ class RobotAvatar {
         }
         
         // Mouth animation for speaking
-        if (this.state === 'speaking' && this.currentSpeakingText) {
+        if (this.state === 'speaking') {
             this.mouthFrame++;
             
-            // Advance through speaking text
-            if (this.mouthFrame % 2 === 0) {
-                this.speakingCharIndex++;
-                if (this.speakingCharIndex >= this.currentSpeakingText.length) {
-                    this.speakingCharIndex = 0;
+            if (this.currentSpeakingText) {
+                // Advance through speaking text character by character
+                if (this.mouthFrame % 2 === 0) {
+                    this.speakingCharIndex++;
+                    if (this.speakingCharIndex >= this.currentSpeakingText.length) {
+                        this.speakingCharIndex = 0;
+                    }
                 }
-            }
-            
-            // Animate mouth based on character
-            const char = this.currentSpeakingText[this.speakingCharIndex] || '';
-            const isVowel = 'aeiouAEIOU'.includes(char);
-            const isPunctuation = '.!?,;'.includes(char);
-            
-            if (isPunctuation) {
-                this.targetMouthOpenness = 0;
-            } else if (isVowel) {
-                this.targetMouthOpenness = 0.7 + Math.random() * 0.3;
+                
+                // Animate mouth based on character
+                const char = this.currentSpeakingText[this.speakingCharIndex] || '';
+                const isVowel = 'aeiouAEIOU'.includes(char);
+                const isPunctuation = '.!?,;'.includes(char);
+                
+                if (isPunctuation) {
+                    this.targetMouthOpenness = 0;
+                } else if (isVowel) {
+                    this.targetMouthOpenness = 0.7 + Math.random() * 0.3;
+                } else {
+                    this.targetMouthOpenness = 0.2 + Math.random() * 0.3;
+                }
             } else {
-                this.targetMouthOpenness = 0.2 + Math.random() * 0.3;
+                // Fallback: animate mouth with sine wave when no text available
+                // This keeps the mouth moving naturally even without specific text
+                const sineValue = Math.sin(this.mouthFrame * 0.15);
+                this.targetMouthOpenness = 0.3 + (sineValue + 1) * 0.35; // Range: 0.3 to 1.0
             }
         } else {
             this.targetMouthOpenness = 0;
@@ -799,8 +814,37 @@ class RobotAvatar {
         
         this.ctx.beginPath();
         
+        // === FALANDO === (prioridade máxima - deve vir primeiro!)
+        if (this.state === 'speaking') {
+            const openAmount = this.mouthOpenness;
+            
+            // Boca oval que abre e fecha naturalmente
+            const mouthWidthSpeaking = mouthWidth * 1.5;
+            const mouthHeightSpeaking = mouthWidth * (0.3 + openAmount * 0.8); // Altura varia com abertura
+            
+            this.ctx.lineWidth = 3;
+            this.ctx.beginPath();
+            this.ctx.ellipse(0, mouthY, mouthWidthSpeaking, mouthHeightSpeaking, 0, 0, Math.PI * 2);
+            this.ctx.stroke();
+            
+            // Adicionar linha interna quando muito aberto para efeito de profundidade
+            if (openAmount > 0.5) {
+                this.ctx.globalAlpha = openAmount * 0.6;
+                this.ctx.beginPath();
+                this.ctx.ellipse(0, mouthY + mouthHeightSpeaking * 0.3, mouthWidthSpeaking * 0.6, mouthHeightSpeaking * 0.4, 0, 0, Math.PI * 2);
+                this.ctx.fill();
+                this.ctx.globalAlpha = 1.0;
+            }
+        }
+        // === PENSANDO ===
+        else if (this.state === 'thinking') {
+            this.ctx.moveTo(-mouthWidth, mouthY);
+            this.ctx.quadraticCurveTo(-mouthWidth / 2, mouthY - 5, 0, mouthY);
+            this.ctx.quadraticCurveTo(mouthWidth / 2, mouthY + 5, mouthWidth, mouthY);
+            this.ctx.stroke();
+        }
         // Dormindo
-        if (this.emotion === 'sleeping' || this.idleAnimationType === 'sleeping') {
+        else if (this.emotion === 'sleeping' || this.idleAnimationType === 'sleeping') {
             // Boca pequena e relaxada
             this.ctx.moveTo(-mouthWidth * 0.6, mouthY);
             this.ctx.lineTo(mouthWidth * 0.6, mouthY);
@@ -831,35 +875,6 @@ class RobotAvatar {
         else if (this.emotion === 'curious' || this.idleAnimationType === 'curious') {
             // Boca pequena em "o"
             this.ctx.arc(0, mouthY, mouthWidth * 0.6, 0, Math.PI * 2, false);
-            this.ctx.stroke();
-        }
-        // === FALANDO ===
-        else if (this.state === 'speaking') {
-            const openAmount = this.mouthOpenness;
-            
-            // Boca oval que abre e fecha naturalmente
-            const mouthWidthSpeaking = mouthWidth * 1.5;
-            const mouthHeightSpeaking = mouthWidth * (0.3 + openAmount * 0.8); // Altura varia com abertura
-            
-            this.ctx.lineWidth = 3;
-            this.ctx.beginPath();
-            this.ctx.ellipse(0, mouthY, mouthWidthSpeaking, mouthHeightSpeaking, 0, 0, Math.PI * 2);
-            this.ctx.stroke();
-            
-            // Adicionar linha interna quando muito aberto para efeito de profundidade
-            if (openAmount > 0.5) {
-                this.ctx.globalAlpha = openAmount * 0.6;
-                this.ctx.beginPath();
-                this.ctx.ellipse(0, mouthY + mouthHeightSpeaking * 0.3, mouthWidthSpeaking * 0.6, mouthHeightSpeaking * 0.4, 0, 0, Math.PI * 2);
-                this.ctx.fill();
-                this.ctx.globalAlpha = 1.0;
-            }
-        }
-        // === PENSANDO ===
-        else if (this.state === 'thinking') {
-            this.ctx.moveTo(-mouthWidth, mouthY);
-            this.ctx.quadraticCurveTo(-mouthWidth / 2, mouthY - 5, 0, mouthY);
-            this.ctx.quadraticCurveTo(mouthWidth / 2, mouthY + 5, mouthWidth, mouthY);
             this.ctx.stroke();
         }
         // === FELIZ (padrão) ===
