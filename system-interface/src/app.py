@@ -430,6 +430,7 @@ if _is_main_process:
             debounce = float(os.getenv('WAKE_WORD_DEBOUNCE_TIME', '2.0'))
 
             def on_wake_word():
+                print(f"⏱️  [TIMING] wake_word_callback t={time.monotonic():.3f}")
                 print("🔔 [CALLBACK] Wake word detectado!")
 
             wake_word_manager = OpenWakeWordManager(debounce_time=debounce)
@@ -1498,6 +1499,10 @@ def api_voice_record_and_transcribe():
         text: str - texto transcrito
         error: str (se falhar)
     """
+    t0 = time.monotonic()
+    def tlog(phase):
+        print(f"⏱️  [TIMING] record_and_transcribe {phase} T+{time.monotonic() - t0:.3f}s")
+    tlog("entry")
     try:
         _update_activity()
         if not VOICE_ENABLED or not whisper_stt:
@@ -1521,21 +1526,39 @@ def api_voice_record_and_transcribe():
         temp_path = temp_file.name
         temp_file.close()
 
+        # Toca o beep de abertura de forma BLOQUEANTE antes de abrir o mic.
+        # Garante que o áudio do beep já saiu do ALSA (e do ar) quando começarmos
+        # a gravar, eliminando a necessidade do descarte inicial de 700ms no VAD.
+        tlog("beep_sync_start")
+        print(f"🔊 [API] Tocando beep (sync) antes de gravar...")
+        play_audio_feedback_sync('chat_open')
+        tlog("beep_sync_end")
+        # Pequena folga para a reverberação acústica da sala decair
+        time.sleep(0.1)
+        tlog("after_beep_sleep")
+
         # Libera o mic para o Whisper (openWakeWord usa o mesmo dispositivo)
         if wake_word_manager and hasattr(wake_word_manager, 'pause'):
+            tlog("oww_pause_start")
             wake_word_manager.pause()
+            tlog("oww_pause_end")
         try:
             print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
+            tlog("record_utterance_start")
             speech_captured = whisper_stt.record_utterance_to_file(temp_path, max_duration=max_duration)
+            tlog(f"record_utterance_end captured={speech_captured}")
         finally:
             if wake_word_manager and hasattr(wake_word_manager, 'resume'):
+                tlog("oww_resume_start")
                 wake_word_manager.resume()
+                tlog("oww_resume_end")
 
         if not speech_captured:
             try:
                 os.remove(temp_path)
             except Exception:
                 pass
+            tlog("return_no_speech")
             return jsonify({
                 'success': False,
                 'error': 'Nenhum som detectado. Fale mais alto.'
@@ -1543,25 +1566,29 @@ def api_voice_record_and_transcribe():
 
         # Transcreve com Whisper
         print(f"🔄 [API] Transcrevendo com Whisper...")
+        tlog("whisper_transcribe_start")
 
         text = whisper_stt._transcribe_audio_file(temp_path)
-        
+        tlog("whisper_transcribe_end")
+
         # Remove arquivo temporário
         try:
             os.remove(temp_path)
         except:
             pass
-        
+
         import re
         cleaned = re.sub(r'\[.*?\]', '', text or '').strip()
         if cleaned:
             print(f"✅ [API] Transcrito: '{cleaned}'")
+            tlog("return_success")
             return jsonify({
                 'success': True,
                 'text': cleaned
             })
         else:
             print(f"⚠️  [API] Nenhuma fala detectada (raw: '{text}')")
+            tlog("return_empty_transcription")
             return jsonify({
                 'success': False,
                 'error': 'Não consegui entender. Tente novamente.'
@@ -1579,14 +1606,14 @@ def api_voice_record_and_transcribe():
 
 def play_audio_feedback(sound_name: str):
     """
-    Toca som de feedback no hardware
-    
+    Toca som de feedback no hardware (não-bloqueante)
+
     Args:
         sound_name: Nome do arquivo sem extensão (ex: 'chat_open', 'message_sent')
     """
     if not audio_player or not audio_player.is_available():
         return False
-    
+
     try:
         sound_path = os.path.join('static', 'sounds', f'{sound_name}.wav')
         if os.path.exists(sound_path):
@@ -1600,6 +1627,23 @@ def play_audio_feedback(sound_name: str):
             return False
     except Exception as e:
         print(f"❌ Erro ao tocar som: {e}")
+        return False
+
+
+def play_audio_feedback_sync(sound_name: str):
+    """Toca som de feedback e só retorna quando o áudio terminou de tocar."""
+    if not audio_player or not audio_player.is_available():
+        return False
+    try:
+        sound_path = os.path.join('static', 'sounds', f'{sound_name}.wav')
+        if not os.path.exists(sound_path):
+            print(f"⚠️  Som não encontrado: {sound_path}")
+            return False
+        audio_player.set_volume(1.0)
+        audio_player.play(sound_path, blocking=True)
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao tocar som (sync): {e}")
         return False
 
 
@@ -1632,7 +1676,10 @@ def api_wake_word_status():
     if wake_word_manager:
         wake_detected = wake_word_manager.check_and_clear_wake()
         connected = wake_word_manager.running  # É uma propriedade, não método
-    
+
+    if wake_detected:
+        print(f"⏱️  [TIMING] wake_word_status wake_detected=True t={time.monotonic():.3f}")
+
     return jsonify({
         'wake_detected': wake_detected,
         'timestamp': datetime.now().isoformat(),

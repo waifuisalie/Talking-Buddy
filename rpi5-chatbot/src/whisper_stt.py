@@ -535,21 +535,29 @@ class WhisperSTT:
             print("❌ PyAudio not available")
             return False
 
+        _rec_t0 = time.monotonic()
+        def _rlog(phase):
+            print(f"⏱️  [TIMING] record_utterance {phase} T+{time.monotonic() - _rec_t0:.3f}s")
+        _rlog("entry")
+
         # Acquire lock — waits if calibration is running (max 3s; calibration is at most 2s)
         if not self._audio_lock.acquire(blocking=True, timeout=3.0):
             print("⚠️  [VAD] Could not acquire audio lock")
             return False
+        _rlog("lock_acquired")
 
         audio = None
         stream = None
         try:
             with _suppress_audio_init_noise():
                 audio = pyaudio.PyAudio()
+            _rlog("pyaudio_init")
 
             # Resolve a safe input device index (handles stale capture_device values)
             if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
                 os.environ['AUDIODEV'] = self.config.capture_device_name
             device_index = self._resolve_input_device_index_with_audio(audio, context="VAD")
+            _rlog(f"device_resolved idx={device_index}")
 
             sample_rate = self.config.sample_rate
             chunk_size = self.config.chunk_size
@@ -579,6 +587,7 @@ class WhisperSTT:
                 stream_kwargs['input_device_index'] = device_index
 
             stream = audio.open(**stream_kwargs)
+            _rlog(f"stream_open rate={sample_rate} chunk={chunk_size}")
 
             chunks_per_second = sample_rate / chunk_size
             rms_window_size = max(3, int(0.2 * chunks_per_second))
@@ -594,23 +603,33 @@ class WhisperSTT:
             last_rms_print = 0.0
             rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
-            # Discard the first 700ms of audio to let any feedback sounds (e.g.
-            # chat_open beep) decay before VAD starts listening.
-            discard_chunks = int(0.7 * sample_rate / chunk_size)
-            for _ in range(discard_chunks):
+            # The caller is responsible for playing any feedback beep BEFORE
+            # opening the mic stream (see play_audio_feedback_sync in app.py).
+            # We only need a short discard to flush stale ALSA buffer contents.
+            discard_chunks = int(0.1 * sample_rate / chunk_size)
+            _rlog(f"discard_start chunks={discard_chunks}")
+            for i in range(discard_chunks):
                 stream.read(chunk_size, exception_on_overflow=False)
+                if i == 0:
+                    _rlog("first_discard_read_returned")
+            _rlog("discard_end")
 
             print("👂 [VAD] Waiting for speech...")
             if self.debug_mode:
                 print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
 
+            _first_loop_read_logged = False
             while True:
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
                     print(f"⏱️  [VAD] Max duration ({max_duration}s) reached")
+                    _rlog(f"max_duration_reached elapsed={elapsed:.2f}")
                     break
 
                 audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                if not _first_loop_read_logged:
+                    _rlog("first_loop_read_returned")
+                    _first_loop_read_logged = True
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
                 try:
@@ -633,6 +652,7 @@ class WhisperSTT:
                 if rms > silence_threshold:
                     if not recording:
                         print("🗣️  [VAD] Speech detected, recording...")
+                        _rlog("speech_detected")
                         recording = True
                     frames.append(audio_data)
                     last_speech_time = time.time()
@@ -641,13 +661,16 @@ class WhisperSTT:
                     silence_elapsed = time.time() - last_speech_time
                     if silence_elapsed >= silence_duration_limit:
                         print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
+                        _rlog(f"silence_detected silence_elapsed={silence_elapsed:.2f}")
                         break
 
+            _rlog("loop_exit stream_close_start")
             stream.stop_stream()
             stream.close()
             stream = None
             audio.terminate()
             audio = None
+            _rlog("stream_close_end")
 
             if not frames:
                 print("⚠️  [VAD] No speech detected")
@@ -668,10 +691,12 @@ class WhisperSTT:
                 wf.writeframes(b''.join(frames))
 
             print(f"💾 [VAD] Saved {duration:.1f}s of audio to {output_path}")
+            _rlog(f"wav_saved duration={duration:.2f}s")
             return True
 
         except Exception as e:
             print(f"❌ [VAD] Error during recording: {e}")
+            _rlog(f"exception {type(e).__name__}")
             return False
         finally:
             if stream:
@@ -686,6 +711,7 @@ class WhisperSTT:
                 except Exception:
                     pass
             self._audio_lock.release()
+            _rlog("finally_done lock_released")
 
     def calibrate_vad(self, duration: float = 2.0) -> Optional[float]:
         """Sample ambient noise and update silence_threshold adaptively.
