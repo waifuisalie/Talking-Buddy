@@ -1,9 +1,0 @@
-# PlatformIO build artifacts
-.pio
-
-# VS Code IDE configuration
-.vscode/
-
-# Temporary debug files
-serial_output.txt
-*.txt.log

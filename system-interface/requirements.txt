@@ -5,11 +5,13 @@ requests>=2.31.0
 python-dotenv>=1.0.0
 numpy>=1.24.0
 pyaudio>=0.2.13
-pyserial>=3.5
 supertonic>=0.1.0
 PyYAML>=6.0.0
 rpi-lgpio>=0.2
 spidev>=3.5
-faster-whisper>=1.0.0
 smbus2>=0.4.0
 gpiod>=2.0.0
+onnxruntime==1.20.1
+tqdm
+scipy
+scikit-learn
