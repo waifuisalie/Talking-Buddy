@@ -3,7 +3,7 @@ Configuration settings for the voice chatbot system - Raspberry Pi 5 Edition
 
 IMPORTANT: This config is specifically tuned for Raspberry Pi 5 with:
 - USB microphone (plughw:CARD=Device,DEV=0)
-- HifiBerry DAC output (hw:CARD=sndrpihifiberry,DEV=0)
+- HDMI 1 audio output (plughw:CARD=vc4hdmi1,DEV=0)
 - Paths in /root/ directory
 - gemma3-ptbr model for Portuguese
 """
@@ -126,8 +126,8 @@ class AudioConfig:
     chunk_size: int = 1024
 
     # ALSA output device configuration - STABLE across reboots
-    # HifiBerry DAC output (card 2, device 0)
-    playback_device_name: str = "hw:CARD=sndrpihifiberry,DEV=0"  # HifiBerry DAC
+    # HDMI 1 audio output (for HDMI audio extractor)
+    playback_device_name: str = "plughw:CARD=vc4hdmi1,DEV=0"  # HDMI 1 output
 
     # Audio device auto-detection (NEW)
     auto_detect_output: bool = True  # Enable auto-detection of output device

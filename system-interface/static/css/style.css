@@ -560,25 +560,37 @@ select {
     margin-bottom: 25px;
 }
 
+/* Animacao RFID: ondas suaves expandindo do centro.
+   Versao discreta — apenas borda fina, sem brilho intenso. */
 .rfid-pulse {
     position: absolute;
-    width: 120px;
-    height: 120px;
-    border: 3px solid var(--accent-color);
-    border-radius: 50%;
+    width: 180px;
+    height: 180px;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%);
-    animation: pulse 2s infinite;
+    border-radius: 50%;
+    background: transparent;
+    border: 2px solid var(--accent-color);
+    transform: translate(-50%, -50%) scale(0.2);
+    opacity: 0;
+    pointer-events: none;
+    animation: rfid-blink-out 3s ease-out infinite;
 }
 
-@keyframes pulse {
+.rfid-pulse-1 { animation-delay: 0s; }
+.rfid-pulse-2 { animation-delay: 1s; }
+.rfid-pulse-3 { animation-delay: 2s; }
+
+@keyframes rfid-blink-out {
     0% {
-        transform: translate(-50%, -50%) scale(0.8);
-        opacity: 1;
+        transform: translate(-50%, -50%) scale(0.2);
+        opacity: 0;
+    }
+    15% {
+        opacity: 0.4;
     }
     100% {
-        transform: translate(-50%, -50%) scale(1.5);
+        transform: translate(-50%, -50%) scale(1.3);
         opacity: 0;
     }
 }
@@ -1113,19 +1125,21 @@ select {
 }
 
 .user-greeting-overlay {
-    position: absolute;
+    position: fixed;
+    /* Canto superior direito; bateria desce para 78px quando este aparece */
     top: 20px;
-    right: 20px;  /* AJUSTADO: De 80px para 20px (mesma distância do botão config) */
-    z-index: 10;
+    right: 20px;
+    z-index: 95;
     color: var(--accent-color);
     font-size: 0.95rem;
     padding: 10px 20px;
-    background: rgba(0, 0, 0, 0.9);
-    border: 3px solid var(--accent-color);  /* AJUSTADO: De 2px para 3px (borda mais destacada) */
-    border-radius: 20px;
-    box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
+    background: rgba(0, 0, 0, 0.7);
+    /* Borda padronizada com .admin-gear-icon e demais botoes do topo */
+    border: 2px solid var(--accent-color);
+    border-radius: 8px;
+    -webkit-backdrop-filter: blur(5px);
+    backdrop-filter: blur(5px);
+    filter: drop-shadow(0 0 8px rgba(0, 255, 0, 0.3));
     animation: slideInRight 0.3s ease-out;
     display: flex;
     align-items: center;
@@ -1384,7 +1398,7 @@ select {
 .chat-input-area {
     display: flex;
     align-items: center; /* Alinha verticalmente input e botão */
-    gap: 10px;
+    gap: 14px;
     padding: 20px;
     background: rgba(0, 0, 0, 0.95);
     border-top: 1px solid var(--border-color);
@@ -1393,8 +1407,8 @@ select {
 /* Mic Button */
 .mic-btn {
     flex-shrink: 0;
-    width: 50px;
-    height: 50px;
+    width: 60px;
+    height: 60px;
     padding: 0;
     background: rgba(10, 10, 10, 0.9);
     border: 3px solid var(--accent-color);  /* PERSONALIZADO: Borda verde 3px (igual popup) */
@@ -1405,7 +1419,12 @@ select {
     align-items: center;
     justify-content: center;
     transition: all 0.3s ease;
-    box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);  /* PERSONALIZADO: Glow verde sutil */
+    box-shadow: 0 0 12px rgba(0, 255, 0, 0.25);  /* PERSONALIZADO: Glow verde sutil */
+}
+
+.mic-btn svg {
+    width: 28px;
+    height: 28px;
 }
 
 .mic-btn:hover {
@@ -1486,14 +1505,14 @@ select {
     background: rgba(10, 10, 10, 0.9);
     border: 2px solid var(--border-color);
     color: var(--text-color);
-    padding: 0 18px; /* Removido padding vertical */
-    font-size: 1rem;
+    padding: 0 22px; /* Removido padding vertical */
+    font-size: 1.05rem;
     font-family: 'Courier New', Courier, monospace;
-    border-radius: 8px;
+    border-radius: 10px;
     transition: all 0.2s ease;
     outline: none;
-    height: 50px;
-    line-height: 50px; /* Centraliza texto verticalmente */
+    height: 60px;
+    line-height: 60px; /* Centraliza texto verticalmente */
 }
 
 .chat-input:focus {
@@ -1549,12 +1568,12 @@ select {
 }
 
 #send-btn {
-    min-width: 120px;
-    padding: 0 25px; /* Removido padding vertical */
+    min-width: 110px;
+    padding: 0 22px; /* Removido padding vertical */
     font-size: 1rem;
     font-weight: bold;
-    height: 50px;
-    border-radius: 8px;
+    height: 60px;
+    border-radius: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1606,7 +1625,7 @@ select {
     .user-greeting-overlay {
         font-size: 1rem;
         padding: 10px 20px;
-        top: 70px;
+        top: 15px;
     }
 }
 
@@ -1643,7 +1662,201 @@ select {
     .user-greeting-overlay {
         font-size: 0.9rem;
         padding: 8px 16px;
-        top: 60px;
+        top: 12px;
+    }
+}
+
+/* Fallback when battery monitor is unavailable: user-greeting permanece em top:20
+   (mesma posicao normal — nao precisa de ajuste especial pois bateria sumiu) */
+
+/* ========== BATTERY INDICATOR ========== */
+
+@keyframes battery-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* Battery Indicator - Fixed Version (canto superior direito da tela do robo) */
+.battery-indicator {
+    position: fixed;
+    /* Default: canto superior direito sempre */
+    top: 20px;
+    right: 20px;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 8px 13px;
+    min-width: 105px;
+    width: auto;
+    background: rgba(0, 0, 0, 0.75);
+    border: 2px solid var(--accent-color);
+    border-radius: 14px;
+    backdrop-filter: blur(5px);
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--accent-color);
+    box-sizing: border-box;
+    opacity: 0.85;
+    transition: opacity 0.3s ease, top 0.3s ease;
+    filter: drop-shadow(0 0 8px rgba(0, 255, 0, 0.3));
+}
+
+/* Quando o user-greeting esta visivel, a bateria desce para nao sobrepor */
+.battery-indicator.user-logged {
+    top: 78px;
+}
+
+.battery-indicator:hover {
+    opacity: 1;
+}
+
+.battery-indicator.hidden {
+    display: none !important;
+}
+
+/* Estado de loading: enquanto a primeira leitura nao chegou */
+.battery-indicator.battery-loading {
+    opacity: 0.5;
+}
+
+.battery-svg {
+    width: 32px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+/* Importante: usar svg.battery-charging para nao colidir com a classe
+   de estado .battery-indicator.battery-charging (que e aplicada ao div). */
+svg.battery-charging {
+    width: 12px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+svg.battery-charging.hidden {
+    display: none;
+}
+
+.battery-text {
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 38px;
+    text-align: center;
+}
+
+.battery-warn {
+    font-weight: bold;
+    font-size: 0.95rem;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-left: 3px;
+}
+
+.battery-warn.hidden {
+    display: none;
+}
+
+/* Battery states - matching admin gear style */
+.battery-indicator.battery-normal,
+.battery-indicator.battery-charging {
+    color: var(--accent-color);
+    border-color: var(--accent-color);
+    filter: drop-shadow(0 0 8px rgba(0, 255, 0, 0.3));
+}
+
+.battery-indicator.battery-medium {
+    color: var(--warning-color);
+    border-color: var(--warning-color);
+    filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.3));
+}
+
+.battery-indicator.battery-low {
+    color: var(--error-color);
+    border-color: var(--error-color);
+    filter: drop-shadow(0 0 8px rgba(255, 0, 0, 0.3));
+    animation: battery-pulse 2s ease-in-out infinite;
+}
+
+.battery-indicator.battery-critical {
+    color: var(--error-color);
+    border-color: var(--error-color);
+    filter: drop-shadow(0 0 12px rgba(255, 0, 0, 0.5));
+    animation: battery-pulse 0.8s ease-in-out infinite;
+}
+
+/* Responsive - maintain good sizing */
+@media (max-width: 768px) {
+    .battery-indicator {
+        top: 18px;
+        right: 15px;
+        padding: 7px 11px;
+        gap: 6px;
+        min-width: 95px;
+    }
+
+    .battery-indicator.user-logged {
+        top: 70px;
+    }
+
+    .battery-svg {
+        width: 28px;
+        height: 14px;
+    }
+
+    svg.battery-charging {
+        width: 11px;
+        height: 16px;
+    }
+
+    .battery-text {
+        font-size: 0.85rem;
+        min-width: 34px;
+    }
+
+    .battery-warn {
+        font-size: 0.85rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .battery-indicator {
+        top: 14px;
+        right: 12px;
+        padding: 6px 10px;
+        gap: 5px;
+        font-size: 0.78rem;
+        min-width: 85px;
+        border-radius: 12px;
+    }
+
+    .battery-indicator.user-logged {
+        top: 62px;
+    }
+
+    .battery-svg {
+        width: 24px;
+        height: 12px;
+    }
+
+    svg.battery-charging {
+        width: 10px;
+        height: 14px;
+    }
+
+    .battery-text {
+        font-size: 0.78rem;
+        min-width: 30px;
+    }
+
+    .battery-warn {
+        font-size: 0.95rem;
     }
 }
 

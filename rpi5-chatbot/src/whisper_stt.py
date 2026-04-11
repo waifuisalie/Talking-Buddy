@@ -98,42 +98,57 @@ class WhisperSTT:
         self._processing_queue = queue.Queue(maxsize=1)  # Frames handed off to worker
         self._processing_thread = None       # Worker thread for Whisper
 
+    def _matches_hw_address(self, device_name: str, info_name_lower: str) -> bool:
+        """Match ALSA numeric addresses like plughw:2,0 against PyAudio names."""
+        try:
+            import re
+            hw_match = re.search(r'(?:^|:)(?:plughw|hw):(\d+),(\d+)', device_name.lower())
+            if not hw_match:
+                return False
+            card_num, dev_num = hw_match.groups()
+            return f"hw:{card_num},{dev_num}" in info_name_lower
+        except Exception:
+            return False
+
     def _find_device_index_by_name(self, device_name: str) -> Optional[int]:
-        """Find PyAudio device index by ALSA device name (fallback method)"""
+        """Find PyAudio input device index from ALSA-like device name."""
         if not self.audio:
             return None
 
         try:
-            # Search for device by name pattern (case-insensitive)
             device_count = self.audio.get_device_count()
             device_name_lower = device_name.lower()
 
             for i in range(device_count):
                 info = self.audio.get_device_info_by_index(i)
-                # Check if device supports input
-                if info['maxInputChannels'] > 0:
-                    info_name_lower = info['name'].lower()
+                if info['maxInputChannels'] <= 0:
+                    continue
 
-                    # Try multiple matching strategies
-                    # 1. Exact substring match
-                    if device_name_lower in info_name_lower:
-                        print(f"🎤 Found matching device: {info['name']} (index {i})")
+                info_name_lower = info['name'].lower()
+
+                # 1) Exact substring match
+                if device_name_lower in info_name_lower:
+                    print(f"🎤 Found matching device: {info['name']} (index {i})")
+                    return i
+
+                # 2) Numeric ALSA match (plughw:2,0 -> (hw:2,0))
+                if self._matches_hw_address(device_name, info_name_lower):
+                    print(f"🎤 Found device by hw address: {info['name']} (index {i})")
+                    return i
+
+                # 3) USB keyword match
+                if 'usb' in device_name_lower and 'usb' in info_name_lower:
+                    print(f"🎤 Found USB microphone: {info['name']} (index {i})")
+                    return i
+
+                # 4) Card name from ALSA syntax (CARD=Device)
+                import re
+                card_match = re.search(r'CARD=([^,]+)', device_name)
+                if card_match:
+                    card_name = card_match.group(1).lower()
+                    if card_name in info_name_lower:
+                        print(f"🎤 Found device by card name: {info['name']} (index {i})")
                         return i
-
-                    # 2. USB pattern match
-                    if 'usb' in device_name_lower and 'usb' in info_name_lower:
-                        print(f"🎤 Found USB microphone: {info['name']} (index {i})")
-                        return i
-
-                    # 3. Card name extraction from ALSA name
-                    # e.g., "plughw:CARD=Device,DEV=0" -> look for "Device" in name
-                    import re
-                    card_match = re.search(r'CARD=([^,]+)', device_name)
-                    if card_match:
-                        card_name = card_match.group(1).lower()
-                        if card_name in info_name_lower:
-                            print(f"🎤 Found device by card name: {info['name']} (index {i})")
-                            return i
 
             print(f"⚠️  Could not find device matching '{device_name}', using default")
             return None
@@ -141,6 +156,45 @@ class WhisperSTT:
         except Exception as e:
             print(f"⚠️  Error finding device by name: {e}, using default")
             return None
+
+    def _resolve_input_device_index_with_audio(self, audio, context: str) -> Optional[int]:
+        """Resolve a valid input device index with safe fallbacks."""
+        device_index = None
+
+        if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+            requested_name = self.config.capture_device_name
+            device_index = self._find_device_index_by_name_with_audio(audio, requested_name)
+            if device_index is None:
+                print(f"⚠️  [{context}] Não encontrou '{requested_name}', tentando fallback")
+
+        if device_index is None and self.config.capture_device >= 0:
+            try:
+                info = audio.get_device_info_by_index(self.config.capture_device)
+                if info.get('maxInputChannels', 0) > 0:
+                    device_index = self.config.capture_device
+                else:
+                    print(f"⚠️  [{context}] capture_device={self.config.capture_device} não é entrada; ignorando")
+            except Exception as e:
+                print(f"⚠️  [{context}] capture_device={self.config.capture_device} inválido: {e}")
+
+        if device_index is None:
+            try:
+                default_info = audio.get_default_input_device_info()
+                device_index = int(default_info['index'])
+            except Exception as e:
+                print(f"⚠️  [{context}] Sem dispositivo de entrada padrão: {e}")
+
+        if device_index is None:
+            try:
+                for i in range(audio.get_device_count()):
+                    info = audio.get_device_info_by_index(i)
+                    if info.get('maxInputChannels', 0) > 0:
+                        device_index = i
+                        break
+            except Exception as e:
+                print(f"⚠️  [{context}] Falha ao enumerar entradas: {e}")
+
+        return device_index
 
     def start(self) -> bool:
         """Start the audio recording system"""
@@ -175,15 +229,11 @@ class WhisperSTT:
                     print("⚠️  Auto-detection failed, using fallback")
                     device_source = "fallback"
 
-            # Fallback: Try to find device by name if configured
-            if device_index is None and hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
-                # Set ALSA environment variable
-                os.environ['AUDIODEV'] = self.config.capture_device_name
-                device_index = self._find_device_index_by_name(self.config.capture_device_name)
-
-            # Final fallback to config.capture_device index
-            if device_index is None and self.config.capture_device >= 0:
-                device_index = self.config.capture_device
+            # Fallback path used by web/API mode (safe against stale indices)
+            if device_index is None:
+                if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
+                    os.environ['AUDIODEV'] = self.config.capture_device_name
+                device_index = self._resolve_input_device_index_with_audio(self.audio, context="STT")
 
             # Check device sample rate and adjust if needed
             actual_sample_rate = self.config.sample_rate
@@ -496,14 +546,10 @@ class WhisperSTT:
             with _suppress_audio_init_noise():
                 audio = pyaudio.PyAudio()
 
-            # Resolve device index the same way start() does
-            device_index = None
+            # Resolve a safe input device index (handles stale capture_device values)
             if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
                 os.environ['AUDIODEV'] = self.config.capture_device_name
-                device_index = self._find_device_index_by_name_with_audio(
-                    audio, self.config.capture_device_name)
-            if device_index is None and self.config.capture_device >= 0:
-                device_index = self.config.capture_device
+            device_index = self._resolve_input_device_index_with_audio(audio, context="VAD")
 
             sample_rate = self.config.sample_rate
             chunk_size = self.config.chunk_size
@@ -666,12 +712,9 @@ class WhisperSTT:
             with _suppress_audio_init_noise():
                 audio = pyaudio.PyAudio()
 
-            device_index = None
             if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
-                device_index = self._find_device_index_by_name_with_audio(
-                    audio, self.config.capture_device_name)
-            if device_index is None and self.config.capture_device >= 0:
-                device_index = self.config.capture_device
+                os.environ['AUDIODEV'] = self.config.capture_device_name
+            device_index = self._resolve_input_device_index_with_audio(audio, context="VAD-Calib")
 
             sample_rate = self.config.sample_rate
             chunk_size = self.config.chunk_size
@@ -756,6 +799,8 @@ class WhisperSTT:
                 if info['maxInputChannels'] > 0:
                     info_name_lower = info['name'].lower()
                     if device_name_lower in info_name_lower:
+                        return i
+                    if self._matches_hw_address(device_name, info_name_lower):
                         return i
                     if 'usb' in device_name_lower and 'usb' in info_name_lower:
                         return i

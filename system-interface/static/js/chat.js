@@ -95,6 +95,61 @@ class ChatManager {
         this.initVoiceRecognition(); // Apenas esconde botão por enquanto
     }
     
+    // ========== INTERNATIONALIZATION (i18n) ==========
+    
+    /**
+     * Atualiza todos os textos da interface baseado no idioma do usuário
+     * @param {string} language - Código do idioma (pt-BR, en-US, es-ES)
+     */
+    updateInterfaceLanguage(language) {
+        console.log(`🌐 [i18n] Atualizando interface para: ${language}`);
+        
+        // Validar idioma
+        if (!window.i18n || !window.i18n.isLanguageSupported(language)) {
+            console.warn(`[i18n] Idioma "${language}" não suportado, usando pt-BR`);
+            language = 'pt-BR';
+        }
+        
+        // Define idioma global no sistema i18n
+        window.i18n.setLanguage(language);
+        
+        // Atualizar todos os elementos com data-i18n-*
+        this.updateI18nElements();
+        
+        // Atualizar placeholder do input (estado atual)
+        if (this.inputField) {
+            // Preservar estado atual (gravando, aguardando, etc.)
+            if (!this.isRecording && !this.isTyping && !this.isProcessingVoice) {
+                this.inputField.placeholder = window.i18n.t('placeholders.type_message');
+            }
+        }
+        
+        console.log(`✅ [i18n] Interface atualizada para ${language}`);
+    }
+    
+    /**
+     * Atualiza elementos HTML com atributos data-i18n-*
+     */
+    updateI18nElements() {
+        // Atualizar todos os elementos com data-i18n-text
+        document.querySelectorAll('[data-i18n-text]').forEach(el => {
+            const key = el.getAttribute('data-i18n-text');
+            el.textContent = window.i18n.t(key);
+        });
+        
+        // Atualizar todos os elementos com data-i18n-placeholder
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+            const key = el.getAttribute('data-i18n-placeholder');
+            el.placeholder = window.i18n.t(key);
+        });
+        
+        // Atualizar todos os elementos com data-i18n-title
+        document.querySelectorAll('[data-i18n-title]').forEach(el => {
+            const key = el.getAttribute('data-i18n-title');
+            el.title = window.i18n.t(key);
+        });
+    }
+    
     // ========== AUDIO FEEDBACK (Backend) ==========
     // Nota: playBeep() antigo via AudioContext foi substituído por playFeedbackSound()
     // porque AudioContext não funciona confiável no navegador sem interação do usuário.
@@ -199,11 +254,10 @@ class ChatManager {
             }, 100);
         });
 
-        // Robot click area - ativa chat quando clica no robô
+        // Robot click area - abre o chat se fechado, fecha se ja estiver aberto
         const robotClickArea = document.getElementById('robot-click-area');
         if (robotClickArea) {
             robotClickArea.addEventListener('click', (e) => {
-                // SEMPRE permite abrir chat ao clicar no robô
                 if (!this.chatActive) {
                     console.log('🤖 Robô clicado! Abrindo chat...');
                     this.showChatInterface();
@@ -212,8 +266,12 @@ class ChatManager {
                             this.inputField.focus();
                         }
                     }, 100);
-                    e.stopPropagation();
+                } else {
+                    // Chat ja esta aberto: clique na cara do robo (fora do painel) fecha
+                    console.log('🤖 Robô clicado com chat aberto — fechando chat');
+                    this.closeChatInterface();
                 }
+                e.stopPropagation();
             });
         }
     }
@@ -252,7 +310,7 @@ class ChatManager {
             if (this.messagesContainer && this.messagesContainer.children.length === 0) {
                 const welcomeMsg = document.createElement('div');
                 welcomeMsg.className = 'message-bubble message-bubble-ai welcome-message';
-                welcomeMsg.textContent = 'Olá! Sou seu assistente virtual. Como posso ajudá-lo(a) hoje?';
+                welcomeMsg.textContent = window.i18n.t('messages.welcome_no_name');
                 this.messagesContainer.appendChild(welcomeMsg);
             }
         }
@@ -408,7 +466,11 @@ class ChatManager {
         // Cria div para a resposta (vazia inicialmente)
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble message-bubble-ai';
-        messageDiv.innerHTML = '<em class="thinking-indicator">🧠 Pensando...</em>';
+        const thinkingLabel = (window.i18n && typeof window.i18n.t === 'function')
+            ? window.i18n.t('messages.thinking')
+            : 'Pensando...';
+        messageDiv.innerHTML = '<em class="thinking-indicator"></em>';
+        messageDiv.querySelector('.thinking-indicator').textContent = thinkingLabel;
         this.messagesContainer.appendChild(messageDiv);
         this.scrollToBottom();
 
@@ -451,19 +513,21 @@ class ChatManager {
             // --- SSE Event Handlers ---
 
             eventSource.addEventListener('text_chunk', (e) => {
-                const { text } = JSON.parse(e.data);
-
-                // Clear "Pensando..." on first chunk but don't show text yet.
-                // Text is displayed in sync with audio via sentence_playing below.
-                if (!thinkingCleared) {
-                    messageDiv.innerHTML = '';
-                    thinkingCleared = true;
-                }
+                // NAO limpar o balao "Pensando..." aqui — o LLM gera tokens muito antes
+                // do TTS sintetizar e do audio comecar a tocar. Limpar agora deixaria
+                // um balao vazio na tela por 1-3s. A limpeza real acontece no
+                // sentence_playing, quando o audio realmente comeca.
             });
 
             eventSource.addEventListener('sentence_playing', (e) => {
                 const { text, index } = JSON.parse(e.data);
                 console.log(`🔊 [SSE] Sentence ${index} playing on hardware: ${text.substring(0, 50)}...`);
+
+                // Limpa o balao "Pensando..." na primeira frase tocada
+                if (!thinkingCleared) {
+                    messageDiv.innerHTML = '';
+                    thinkingCleared = true;
+                }
 
                 // Show sentence text in sync with hardware audio playback
                 messageDiv.textContent += (messageDiv.textContent ? ' ' : '') + text;
@@ -480,11 +544,11 @@ class ChatManager {
             });
 
             eventSource.addEventListener('sentence_done', (e) => {
-                // A sentence finished playing on hardware — stop mouth animation
-                // until the next sentence_playing event arrives.
+                // A sentence finished playing on hardware
+                // Clear the text but keep speaking state - next sentence will arrive soon
+                // Only response_done should stop speaking entirely
                 if (window.robotAvatar) {
-                    window.robotAvatar.stopSpeaking();
-                    isSpeaking = false;
+                    window.robotAvatar.clearSpeakingText();
                 }
             });
 
@@ -846,9 +910,9 @@ class ChatManager {
                         console.error('\u274c RFID poll error:', error);
                     }
                 });
-        }, 3000); // 3 segundos - reduz carga no servidor
-        
-        console.log('RFID polling configurado (intervalo: 3s - otimizado para Raspberry Pi)');
+        }, 1500); // 1.5s — equilibrio entre velocidade de deteccao e CPU no Pi
+
+        console.log('RFID polling configurado (intervalo: 1.5s - equilibrio velocidade/CPU)');
     }
     
     // ========== WAKE WORD POLLING (ESP32) ==========
@@ -954,6 +1018,13 @@ class ChatManager {
                     
                     this.currentUser = data.user;
                     this.currentUser.rfid = rfid;
+                    
+                    // 🌐 ATUALIZAR IDIOMA DA INTERFACE IMEDIATAMENTE
+                    if (data.user.language) {
+                        console.log(`🌐 [i18n] Atualizando idioma para: ${data.user.language}`);
+                        this.updateInterfaceLanguage(data.user.language);
+                    }
+                    
                     this.showUserGreeting(data.user.name);
                     
                     // Carregar histórico do banco de dados
@@ -1040,30 +1111,57 @@ class ChatManager {
                     
                     // Scroll para o fim
                     this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+                    
+                    // ✅ NÃO mostrar boas-vindas quando há histórico existente
+                    console.log('ℹ️ Histórico existente - pulando mensagem de boas-vindas');
                 } else {
                     console.log('ℹ️ Nenhum histórico encontrado para este usuário');
+                    
+                    // ✅ MOSTRAR boas-vindas APENAS para usuários novos (sem histórico)
+                    if (this.messagesContainer) {
+                        this.messagesContainer.innerHTML = '';
+                    }
+                    this.chatHistory = [];
+                    
+                    if (this.currentUser && this.currentUser.name) {
+                        console.log('💬 Usuário novo - mostrando mensagem de boas-vindas');
+                        this.showWelcomeMessage(this.currentUser.name);
+                    }
                 }
             })
             .catch(error => {
                 console.error('❌ Erro ao carregar histórico:', error);
+                
+                // ✅ NÃO mostrar boas-vindas em caso de erro (para evitar poluição)
+                if (this.messagesContainer) {
+                    this.messagesContainer.innerHTML = '';
+                }
+                this.chatHistory = [];
+                
+                console.log('⚠️ Erro ao carregar histórico - chat vazio sem mensagem de boas-vindas');
             });
     }
     
     showUserGreeting(name) {
         if (this.userNameDisplay) {
-            this.userNameDisplay.innerHTML = `<strong>✅ Logado:</strong> ${name}`;
+            const loggedInLabel = window.i18n.t('labels.logged_in');
+            this.userNameDisplay.innerHTML = `<strong>✅ ${loggedInLabel}:</strong> ${name}`;
         }
         if (this.userGreeting) {
             this.userGreeting.classList.remove('hidden');
         }
-        
+
+        // Empurra a bateria para baixo enquanto o user-greeting estiver visivel
+        const batteryEl = document.getElementById('battery-indicator');
+        if (batteryEl) batteryEl.classList.add('user-logged');
+
         // Iniciar timer de inatividade do usuário
         this.resetUserInactivityTimer();
     }
     
     showWelcomeMessage(name) {
         // Add personalized welcome message
-        const welcomeMsg = `Olá, ${name}!\n\nSou seu assistente virtual. Como posso ajudá-lo(a) hoje?`;
+        const welcomeMsg = window.i18n.t('messages.welcome_with_name', { name: name });
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble message-bubble-ai welcome-message';
         
@@ -1361,6 +1459,9 @@ class ChatManager {
         console.log('  Usuário:', this.currentUser.name);
         console.log('  RFID:', this.currentUser.rfid);
         
+        // Tocar som de logout
+        this.playFeedbackSound('logout');
+        
         // Salvar histórico antes de fazer logout
         if (this.currentUser.rfid) {
             this.saveUserHistory();
@@ -1385,6 +1486,17 @@ class ChatManager {
         if (this.userGreeting) {
             this.userGreeting.classList.add('hidden');
             console.log('✅ [logout] Greeting escondido');
+        }
+
+        // Bateria volta para o topo
+        const batteryEl = document.getElementById('battery-indicator');
+        if (batteryEl) batteryEl.classList.remove('user-logged');
+        
+        // 🌐 Resetar idioma para pt-BR (padrão do sistema)
+        if (window.i18n) {
+            console.log('🌐 [logout] Resetando idioma para pt-BR');
+            window.i18n.setLanguage('pt-BR');
+            this.updateI18nElements();
         }
         
         // Limpar timer de inatividade
@@ -1423,7 +1535,7 @@ class ChatManager {
         // Bloquear campo de texto
         if (this.inputField) {
             this.inputField.disabled = true;
-            this.inputField.placeholder = 'Aguarde a resposta...';
+            this.inputField.placeholder = window.i18n.t('placeholders.wait_response');
             this.inputField.classList.add('input-blocked');
         }
         
@@ -1444,7 +1556,7 @@ class ChatManager {
         // Desbloquear campo de texto
         if (this.inputField) {
             this.inputField.disabled = false;
-            this.inputField.placeholder = 'Digite sua mensagem...';
+            this.inputField.placeholder = window.i18n.t('placeholders.type_message');
             this.inputField.classList.remove('input-blocked');
         }
         
@@ -1521,7 +1633,7 @@ class ChatManager {
         // Visual feedback
         this.micButton.classList.add('recording');
         this.micButton.disabled = true;
-        this.inputField.placeholder = 'Gravando... Fale agora!';
+        this.inputField.placeholder = window.i18n.t('placeholders.recording');
         this.sendButton.disabled = true;
         
         // Mudar estado do robô
@@ -1555,7 +1667,7 @@ class ChatManager {
                 
                 // Coloca texto no input
                 this.inputField.value = data.text;
-                this.inputField.placeholder = 'Digite sua mensagem...';
+                this.inputField.placeholder = window.i18n.t('placeholders.type_message');
                 
                 // Envia automaticamente
                 setTimeout(() => {
@@ -1564,19 +1676,19 @@ class ChatManager {
                 
             } else {
                 console.error('❌ [Voice] Erro:', data.error);
-                this.inputField.placeholder = 'Não consegui entender. Tente novamente.';
+                this.inputField.placeholder = window.i18n.t('placeholders.not_understood');
                 
                 setTimeout(() => {
-                    this.inputField.placeholder = 'Digite sua mensagem...';
+                    this.inputField.placeholder = window.i18n.t('placeholders.type_message');
                 }, 3000);
             }
             
         } catch (error) {
             console.error('❌ [Voice] Erro na gravação:', error);
-            this.inputField.placeholder = 'Erro ao gravar. Tente novamente.';
+            this.inputField.placeholder = window.i18n.t('placeholders.recording_error');
             
             setTimeout(() => {
-                this.inputField.placeholder = 'Digite sua mensagem...';
+                this.inputField.placeholder = window.i18n.t('placeholders.type_message');
             }, 3000);
             
         } finally {

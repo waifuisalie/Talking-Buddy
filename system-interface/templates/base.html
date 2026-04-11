@@ -18,7 +18,7 @@
     <div id="virtual-keyboard" class="keyboard-overlay">
         <div class="keyboard-container">
             <div class="keyboard-header">
-                <span id="keyboard-title">Digite:</span>
+                <span id="keyboard-title" data-i18n-text="keyboard.title">Digite:</span>
             </div>
             
             <div class="keyboard-input-display">
@@ -38,7 +38,7 @@
                         <button class="key" data-key="8">8</button>
                         <button class="key" data-key="9">9</button>
                         <button class="key" data-key="0">0</button>
-                        <button class="key key-backspace" data-key="backspace">APAGAR</button>
+                        <button class="key key-backspace" data-key="backspace" data-i18n-text="keyboard.backspace">APAGAR</button>
                     </div>
                     
                     <div class="keyboard-row">
@@ -56,7 +56,7 @@
                     </div>
                     
                     <div class="keyboard-row">
-                        <button class="key key-shift" data-key="shift">SHIFT</button>
+                        <button class="key key-shift" data-key="shift" data-i18n-text="keyboard.shift">SHIFT</button>
                         <button class="key" data-key="a">a</button>
                         <button class="key" data-key="s">s</button>
                         <button class="key" data-key="d">d</button>
@@ -89,7 +89,7 @@
                         <button class="key" data-key=")">)</button>
                         <button class="key" data-key="-">-</button>
                         <button class="key" data-key="_">_</button>
-                        <button class="key key-space" data-key="space">ESPACO</button>
+                        <button class="key key-space" data-key="space" data-i18n-text="keyboard.space">ESPACO</button>
                         <button class="key" data-key="+">+</button>
                         <button class="key" data-key="=">=</button>
                         <button class="key" data-key="/">/</button>
@@ -97,8 +97,8 @@
                 </div>
                 
                 <div class="keyboard-actions">
-                    <button class="btn-keyboard-cancel" onclick="closeKeyboard()">CANCELAR</button>
-                    <button class="btn-keyboard-ok" onclick="confirmKeyboard()">CONFIRMAR</button>
+                    <button class="btn-keyboard-cancel" data-i18n-text="keyboard.cancel" onclick="closeKeyboard()">CANCELAR</button>
+                    <button class="btn-keyboard-ok" data-i18n-text="keyboard.confirm" onclick="confirmKeyboard()">CONFIRMAR</button>
                 </div>
                 </div>
             </div>
@@ -113,7 +113,13 @@
         </div>
     </div>
     
+    <!-- Battery Indicator: renderizado apenas na tela do robo (robot_chat.html) -->
+    {% block battery_indicator %}{% endblock %}
+
+    <!-- i18n carregado em todas as paginas para que o teclado virtual saiba traduzir titulos -->
+    <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block extra_scripts %}{% endblock %}
     {% block scripts %}{% endblock %}
 </body>
 </html>
