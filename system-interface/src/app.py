@@ -382,9 +382,16 @@ if VOICE_ENABLED:
                         continue
                     idle_secs = time.time() - _last_activity_time
                     if idle_secs >= 30:
-                        new_thresh = whisper_stt.calibrate_vad(duration=2.0)
-                        if new_thresh:
-                            print(f"🎚️  [VAD] Auto-recalibrado: threshold={new_thresh:.0f} (idle {idle_secs:.0f}s)")
+                        oww = wake_word_manager
+                        if oww and hasattr(oww, 'pause'):
+                            oww.pause()
+                        try:
+                            new_thresh = whisper_stt.calibrate_vad(duration=2.0)
+                            if new_thresh:
+                                print(f"🎚️  [VAD] Auto-recalibrado: threshold={new_thresh:.0f} (idle {idle_secs:.0f}s)")
+                        finally:
+                            if oww and hasattr(oww, 'resume'):
+                                oww.resume()
 
             threading.Thread(target=_vad_recalibration_loop, daemon=True, name="VADRecalibration").start()
 
