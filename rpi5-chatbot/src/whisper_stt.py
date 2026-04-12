@@ -610,22 +610,51 @@ class WhisperSTT:
             _reader_stop = threading.Event()
 
             def _audio_reader():
+                _no_data_since = None
+                _stall_warned = False
+                _recovery_attempted = False
                 while not _reader_stop.is_set():
                     try:
                         try:
                             available = stream.get_read_available()
-                        except Exception:
+                        except Exception as e:
+                            print(f"⚠️  [VAD] Reader: get_read_available() failed: {e} "
+                                  f"(active={stream.is_active()}, stopped={stream.is_stopped()})")
                             break
                         if available < chunk_size:
+                            now = time.monotonic()
+                            if _no_data_since is None:
+                                _no_data_since = now
+                            stall_dur = now - _no_data_since
+                            if stall_dur >= 2.0 and not _stall_warned:
+                                _stall_warned = True
+                                print(f"⚠️  [VAD] Reader: mic stall detected ({stall_dur:.1f}s no data) "
+                                      f"active={stream.is_active()} stopped={stream.is_stopped()}")
+                            if stall_dur >= 3.0 and not _recovery_attempted:
+                                _recovery_attempted = True
+                                print(f"🔄 [VAD] Reader: attempting ALSA recovery (stop+start)...")
+                                try:
+                                    stream.stop_stream()
+                                    stream.start_stream()
+                                    print(f"✅ [VAD] Reader: ALSA recovery succeeded")
+                                    _no_data_since = None
+                                    _stall_warned = False
+                                except Exception as re:
+                                    print(f"❌ [VAD] Reader: ALSA recovery failed: {re}")
+                                    break
                             time.sleep(0.005)
                             continue
+                        _no_data_since = None
+                        _stall_warned = False
+                        _recovery_attempted = False
                         data = stream.read(chunk_size, exception_on_overflow=False)
                         try:
                             _audio_queue.put_nowait(data)
                         except queue.Full:
                             pass
                     except Exception as e:
-                        print(f"⚠️  [VAD] Reader error: {e}")
+                        print(f"⚠️  [VAD] Reader error: {e} "
+                              f"(active={stream.is_active()}, stopped={stream.is_stopped()})")
                         break
 
             _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
@@ -812,13 +841,28 @@ class WhisperSTT:
             stream = audio.open(**stream_kwargs)
 
             n_chunks = int(duration * sample_rate / chunk_size)
+            deadline = time.monotonic() + duration + 3.0
             rms_values = []
             for _ in range(n_chunks):
-                data = stream.read(chunk_size, exception_on_overflow=False)
-                arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
-                rms_sq = np.mean(arr ** 2)
-                if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
-                    rms_values.append(np.sqrt(rms_sq))
+                while True:
+                    if time.monotonic() > deadline:
+                        print("⚠️  [VAD] Calibration aborted — mic stall during read")
+                        break
+                    try:
+                        available = stream.get_read_available()
+                    except Exception:
+                        available = 0
+                    if available >= chunk_size:
+                        break
+                    time.sleep(0.005)
+                else:
+                    data = stream.read(chunk_size, exception_on_overflow=False)
+                    arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                    rms_sq = np.mean(arr ** 2)
+                    if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                        rms_values.append(np.sqrt(rms_sq))
+                    continue
+                break
 
             stream.stop_stream()
             stream.close()
