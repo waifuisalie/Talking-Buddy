@@ -603,13 +603,43 @@ class WhisperSTT:
             last_rms_print = 0.0
             rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
-            # The caller is responsible for playing any feedback beep BEFORE
-            # opening the mic stream (see play_audio_feedback_sync in app.py).
-            # We only need a short discard to flush stale ALSA buffer contents.
+            # Background reader thread: polls get_read_available() so we never
+            # block inside stream.read(). This guarantees max_duration is always
+            # honoured even if the USB mic stalls.
+            _audio_queue = queue.Queue(maxsize=500)
+            _reader_stop = threading.Event()
+
+            def _audio_reader():
+                while not _reader_stop.is_set():
+                    try:
+                        try:
+                            available = stream.get_read_available()
+                        except Exception:
+                            break
+                        if available < chunk_size:
+                            time.sleep(0.005)
+                            continue
+                        data = stream.read(chunk_size, exception_on_overflow=False)
+                        try:
+                            _audio_queue.put_nowait(data)
+                        except queue.Full:
+                            pass
+                    except Exception as e:
+                        print(f"⚠️  [VAD] Reader error: {e}")
+                        break
+
+            _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
+            _reader_thread.start()
+            _rlog("reader_thread_started")
+
+            # Discard first ~100ms to flush stale ALSA buffer contents.
             discard_chunks = int(0.1 * sample_rate / chunk_size)
             _rlog(f"discard_start chunks={discard_chunks}")
             for i in range(discard_chunks):
-                stream.read(chunk_size, exception_on_overflow=False)
+                try:
+                    _audio_queue.get(timeout=1.0)
+                except queue.Empty:
+                    break
                 if i == 0:
                     _rlog("first_discard_read_returned")
             _rlog("discard_end")
@@ -626,7 +656,10 @@ class WhisperSTT:
                     _rlog(f"max_duration_reached elapsed={elapsed:.2f}")
                     break
 
-                audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                try:
+                    audio_data = _audio_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
                 if not _first_loop_read_logged:
                     _rlog("first_loop_read_returned")
                     _first_loop_read_logged = True
@@ -664,8 +697,14 @@ class WhisperSTT:
                         _rlog(f"silence_detected silence_elapsed={silence_elapsed:.2f}")
                         break
 
+            # Shutdown reader: stop_stream() first to unblock any in-progress
+            # read(), then join, then close. Wrong order causes heap corruption.
+            _reader_stop.set()
             _rlog("loop_exit stream_close_start")
             stream.stop_stream()
+            _reader_thread.join(timeout=2.0)
+            if _reader_thread.is_alive():
+                print("⚠️  [VAD] Reader thread did not exit cleanly after stop_stream()")
             stream.close()
             stream = None
             audio.terminate()
@@ -699,9 +738,17 @@ class WhisperSTT:
             _rlog(f"exception {type(e).__name__}")
             return False
         finally:
+            if '_reader_stop' in locals():
+                _reader_stop.set()
+            if '_reader_thread' in locals() and _reader_thread.is_alive():
+                if stream:
+                    try:
+                        stream.stop_stream()
+                    except Exception:
+                        pass
+                _reader_thread.join(timeout=2.0)
             if stream:
                 try:
-                    stream.stop_stream()
                     stream.close()
                 except Exception:
                     pass
