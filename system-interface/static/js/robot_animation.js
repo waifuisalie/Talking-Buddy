@@ -190,7 +190,7 @@ class RobotAvatar {
             this.faceExpression = 'speaking';
         } else if (newState === 'thinking') {
             this.faceExpression = 'thinking';
-            this.targetHeadTilt = 0.035;
+            this.targetHeadTilt = 0;
         } else if (newState === 'listening') {
             this.emotion = 'curious';
             this.faceExpression = 'curious';
@@ -474,6 +474,15 @@ class RobotAvatar {
                     this.eyeBrightness = 1.0;
                 }
             }
+        } else if (this.state === 'thinking') {
+            this.idleAnimationType = 'normal';
+            this.idleAnimationProgress = 0;
+            this.eyeLookTimer = 0;
+
+            const thinkingPhase = this.animationFrame * 0.08;
+            this.eyeLookDirection = 0.12 + Math.sin(thinkingPhase) * 0.1;
+            this.eyeLookY = -0.3 + Math.cos(thinkingPhase * 0.7) * 0.045;
+            this.targetHeadTilt = 0;
         } else {
             // Reset idle quando não está idle
             this.idleAnimationType = 'normal';
@@ -684,6 +693,11 @@ class RobotAvatar {
         
         // Mouth
         this.drawMouth(w, h);
+
+        // Efeito visual de "ideia surgindo" durante o pensamento
+        if (this.state === 'thinking') {
+            this.drawThinkingIdea(w, h);
+        }
     }
     
     drawEyes(w, h) {
@@ -749,6 +763,13 @@ class RobotAvatar {
         if (this.emotion === 'bored' || this.idleAnimationType === 'bored') {
             eyeShapeModifier = 0.5; // Semicerrados
         }
+
+        // === PENSANDO ===
+        if (this.state === 'thinking') {
+            eyeHeight *= 0.84;
+            eyeWidth *= 1.08;
+            eyeShapeModifier = 0.78 + Math.sin(this.animationFrame * 0.08) * 0.07;
+        }
         
         // Piscar
         let eyeScaleY = eyeShapeModifier;
@@ -797,6 +818,30 @@ class RobotAvatar {
         this.ctx.restore();
         
         this.ctx.shadowBlur = 0;
+
+        // Sobrancelhas no estado de pensamento
+        if (this.state === 'thinking') {
+            const browY = eyeY - eyeHeight * 1.35;
+            const browHalf = eyeWidth * 1.32;
+            const browPulse = Math.sin(this.animationFrame * 0.1) * 0.65;
+
+            this.ctx.strokeStyle = eyeColor;
+            this.ctx.lineWidth = 2;
+            this.ctx.shadowColor = '#00ff00';
+            this.ctx.shadowBlur = 5;
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(-eyeSpacing - browHalf, browY + 1 + browPulse);
+            this.ctx.quadraticCurveTo(-eyeSpacing, browY - 2.2 + browPulse, -eyeSpacing + browHalf, browY + 1 + browPulse);
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.moveTo(eyeSpacing - browHalf, browY + 1 + browPulse);
+            this.ctx.quadraticCurveTo(eyeSpacing, browY - 2.2 + browPulse, eyeSpacing + browHalf, browY + 1 + browPulse);
+            this.ctx.stroke();
+
+            this.ctx.shadowBlur = 0;
+        }
     }
     
     drawMouth(w, h) {
@@ -838,9 +883,16 @@ class RobotAvatar {
         }
         // === PENSANDO ===
         else if (this.state === 'thinking') {
-            this.ctx.moveTo(-mouthWidth, mouthY);
-            this.ctx.quadraticCurveTo(-mouthWidth / 2, mouthY - 5, 0, mouthY);
-            this.ctx.quadraticCurveTo(mouthWidth / 2, mouthY + 5, mouthWidth, mouthY);
+            const thoughtWave = Math.sin(this.animationFrame * 0.1) * 0.9;
+            const mouthTension = Math.sin(this.animationFrame * 0.06) * 0.4;
+            this.ctx.lineWidth = 3;
+            this.ctx.moveTo(-mouthWidth * 0.58, mouthY + 1.2);
+            this.ctx.quadraticCurveTo(
+                0,
+                mouthY - 2 + thoughtWave - mouthTension,
+                mouthWidth * 0.58,
+                mouthY + 1.2
+            );
             this.ctx.stroke();
         }
         // Dormindo
@@ -885,6 +937,132 @@ class RobotAvatar {
         }
         
         this.ctx.shadowBlur = 0;
+    }
+
+    drawThinkingIdea(w, h) {
+        const cycleFrames = 180;
+        const t = (this.animationFrame % cycleFrames) / cycleFrames;
+        const appear = Math.min(1, t / 0.35);
+        const disappear = t > 0.85 ? Math.max(0, 1 - (t - 0.85) / 0.15) : 1;
+        const alpha = appear * disappear;
+        if (alpha <= 0) return;
+
+        const pulse = (Math.sin(this.animationFrame * 0.2) + 1) / 2;
+        const tailBaseX = w * 0.16;
+        const tailBaseY = -h * 0.1;
+        const cloudX = w * 0.3;
+        const cloudY = -h * 0.34 + Math.sin(this.animationFrame * 0.07) * 1.5;
+        const cloudScale = (0.82 + pulse * 0.06) * appear;
+
+        // Bolhinhas do balão (ligação cabeça -> nuvem)
+        const tailBubbles = [
+            { x: tailBaseX, y: tailBaseY, r: w * 0.009, threshold: 0.05 },
+            { x: w * 0.2, y: -h * 0.17, r: w * 0.013, threshold: 0.12 },
+            { x: w * 0.245, y: -h * 0.245, r: w * 0.017, threshold: 0.2 }
+        ];
+        this.ctx.save();
+        for (const b of tailBubbles) {
+            const vis = Math.max(0, Math.min(1, (appear - b.threshold) / 0.2)) * disappear;
+            if (vis <= 0) continue;
+            this.ctx.beginPath();
+            this.ctx.fillStyle = `rgba(0, 255, 0, ${0.14 + vis * 0.38})`;
+            this.ctx.shadowColor = '#00ff00';
+            this.ctx.shadowBlur = 4 + vis * 6;
+            this.ctx.arc(b.x, b.y, b.r * (0.92 + pulse * 0.08), 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        this.ctx.restore();
+
+        // Nuvem do balão
+        const lobes = [
+            { x: -w * 0.038, y: 0, r: w * 0.045 },
+            { x: 0, y: -h * 0.02, r: w * 0.058 },
+            { x: w * 0.045, y: -h * 0.002, r: w * 0.043 },
+            { x: w * 0.012, y: h * 0.022, r: w * 0.052 }
+        ];
+
+        this.ctx.save();
+        this.ctx.translate(cloudX, cloudY);
+        this.ctx.scale(cloudScale, cloudScale);
+        this.ctx.shadowColor = '#00ff00';
+        this.ctx.shadowBlur = 9 + pulse * 5;
+
+        for (const l of lobes) {
+            this.ctx.beginPath();
+            this.ctx.fillStyle = `rgba(0, 255, 0, ${(0.12 + pulse * 0.05) * alpha})`;
+            this.ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+            this.ctx.fill();
+        }
+        for (const l of lobes) {
+            this.ctx.beginPath();
+            this.ctx.strokeStyle = `rgba(0, 255, 0, ${(0.55 + pulse * 0.25) * alpha})`;
+            this.ctx.lineWidth = 1.7 / Math.max(cloudScale, 0.001);
+            this.ctx.arc(l.x, l.y, l.r, 0, Math.PI * 2);
+            this.ctx.stroke();
+        }
+
+        // Lâmpada verde dentro do balão
+        const bulbR = w * 0.046 * (0.95 + pulse * 0.1);
+
+        // Fundo interno mais escuro para destacar a lampada dentro da nuvem
+        this.ctx.beginPath();
+        this.ctx.fillStyle = `rgba(0, 90, 0, ${0.35 * alpha})`;
+        this.ctx.arc(0, 0, bulbR * 1.55, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        this.ctx.beginPath();
+        this.ctx.fillStyle = `rgba(0, 255, 0, ${(0.3 + pulse * 0.16) * alpha})`;
+        this.ctx.arc(0, 0, bulbR * 1.45, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        this.ctx.beginPath();
+        this.ctx.shadowColor = '#00ff00';
+        this.ctx.shadowBlur = 14 + pulse * 10;
+        this.ctx.fillStyle = `rgba(110, 255, 110, ${0.86 * alpha})`;
+        this.ctx.strokeStyle = `rgba(180, 255, 180, ${alpha})`;
+        this.ctx.lineWidth = 2.5 / Math.max(cloudScale, 0.001);
+        this.ctx.ellipse(0, -bulbR * 0.06, bulbR * 0.68, bulbR * 0.8, 0, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+
+        this.ctx.beginPath();
+        this.ctx.strokeStyle = `rgba(180, 255, 180, ${alpha})`;
+        this.ctx.lineWidth = 2.1 / Math.max(cloudScale, 0.001);
+        this.ctx.moveTo(-bulbR * 0.22, bulbR * 0.62);
+        this.ctx.lineTo(bulbR * 0.22, bulbR * 0.62);
+        this.ctx.moveTo(-bulbR * 0.16, bulbR * 0.82);
+        this.ctx.lineTo(bulbR * 0.16, bulbR * 0.82);
+        this.ctx.stroke();
+
+        this.ctx.beginPath();
+        this.ctx.strokeStyle = `rgba(110, 255, 110, ${alpha})`;
+        this.ctx.lineWidth = 1.9 / Math.max(cloudScale, 0.001);
+        this.ctx.moveTo(-bulbR * 0.17, bulbR * 0.18);
+        this.ctx.lineTo(-bulbR * 0.04, bulbR * 0.32);
+        this.ctx.lineTo(bulbR * 0.04, bulbR * 0.18);
+        this.ctx.lineTo(bulbR * 0.17, bulbR * 0.32);
+        this.ctx.stroke();
+
+        // Brilho interno visivel
+        this.ctx.beginPath();
+        this.ctx.fillStyle = `rgba(200, 255, 200, ${0.5 * alpha})`;
+        this.ctx.arc(-bulbR * 0.18, -bulbR * 0.26, bulbR * 0.17, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        const rayCount = 6;
+        for (let i = 0; i < rayCount; i++) {
+            const angle = (Math.PI * 2 * i) / rayCount + this.animationFrame * 0.035;
+            const rayStart = bulbR * 1.08;
+            const rayEnd = rayStart + bulbR * (0.34 + pulse * 0.45);
+            this.ctx.beginPath();
+            this.ctx.strokeStyle = `rgba(0, 255, 0, ${(0.38 + pulse * 0.42) * alpha})`;
+            this.ctx.lineWidth = 1.6 / Math.max(cloudScale, 0.001);
+            this.ctx.moveTo(Math.cos(angle) * rayStart, Math.sin(angle) * rayStart);
+            this.ctx.lineTo(Math.cos(angle) * rayEnd, Math.sin(angle) * rayEnd);
+            this.ctx.stroke();
+        }
+
+        this.ctx.restore();
     }
     
     drawScanlines(w, h) {
