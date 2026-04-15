@@ -31,6 +31,8 @@ class ChatManager {
         
         // 🔥 OTIMIZAÇÃO: Array para rastrear intervalos typewriter
         this._typewriterIntervals = [];
+        this._thinkingIndicatorIntervals = new Map();
+        this._chatDragScrollInitialized = false;
         
         // DOM elements
         this.chatInterface = document.getElementById('chat-interface');
@@ -274,6 +276,8 @@ class ChatManager {
                 e.stopPropagation();
             });
         }
+
+        this.initializeChatDragScroll();
     }
     
     showChatInterface(options = {}) {
@@ -351,6 +355,7 @@ class ChatManager {
     
     clearChat() {
         console.log('Limpando chat completamente...');
+        this.stopAllThinkingIndicators();
         
         // Limpar histórico de mensagens
         this.chatHistory = [];
@@ -466,11 +471,8 @@ class ChatManager {
         // Cria div para a resposta (vazia inicialmente)
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message-bubble message-bubble-ai';
-        const thinkingLabel = (window.i18n && typeof window.i18n.t === 'function')
-            ? window.i18n.t('messages.thinking')
-            : 'Pensando...';
         messageDiv.innerHTML = '<em class="thinking-indicator"></em>';
-        messageDiv.querySelector('.thinking-indicator').textContent = thinkingLabel;
+        this.startThinkingIndicator(messageDiv);
         this.messagesContainer.appendChild(messageDiv);
         this.scrollToBottom();
 
@@ -525,6 +527,7 @@ class ChatManager {
 
                 // Limpa o balao "Pensando..." na primeira frase tocada
                 if (!thinkingCleared) {
+                    this.stopThinkingIndicator(messageDiv);
                     messageDiv.innerHTML = '';
                     thinkingCleared = true;
                 }
@@ -564,6 +567,7 @@ class ChatManager {
                     try {
                         const { error } = JSON.parse(e.data);
                         console.error('❌ [SSE] Server error:', error);
+                        this.stopThinkingIndicator(messageDiv);
                         if (!thinkingCleared) messageDiv.innerHTML = '';
                         messageDiv.textContent += `\n\nErro: ${error}`;
                     } catch (_) {
@@ -579,6 +583,7 @@ class ChatManager {
         })
         .catch(error => {
             console.error('❌ [API] Requisição falhou:', error);
+            this.stopThinkingIndicator(messageDiv);
             messageDiv.textContent = `Erro de conexão: ${error.message}`;
 
             if (window.robotAvatar) {
@@ -595,6 +600,7 @@ class ChatManager {
         /**
          * Shared cleanup after SSE stream ends (success or error)
          */
+        this.stopThinkingIndicator(messageDiv);
         this.isTyping = false;
 
         if (window.robotAvatar) {
@@ -818,6 +824,129 @@ class ChatManager {
                 }
             }
         }, intervalMs);
+    }
+
+    getThinkingMessages() {
+        const fallback = [
+            'Pensando...',
+            'Analisando sua pergunta...',
+            'Conectando ideias...',
+            'Preparando uma boa resposta...'
+        ];
+
+        if (!window.i18n || typeof window.i18n.t !== 'function') {
+            return fallback;
+        }
+
+        const keys = [
+            'messages.thinking',
+            'messages.thinking_alt_1',
+            'messages.thinking_alt_2',
+            'messages.thinking_alt_3'
+        ];
+
+        const messages = keys
+            .map(key => window.i18n.t(key))
+            .filter(msg => typeof msg === 'string' && !msg.startsWith('['));
+
+        return messages.length > 0 ? messages : fallback;
+    }
+
+    startThinkingIndicator(messageDiv) {
+        if (!messageDiv) return;
+
+        this.stopThinkingIndicator(messageDiv);
+
+        const indicator = messageDiv.querySelector('.thinking-indicator');
+        if (!indicator) return;
+
+        let currentIndex = 0;
+        const updateThinkingText = () => {
+            const messages = this.getThinkingMessages();
+            indicator.textContent = messages[currentIndex % messages.length];
+            currentIndex++;
+        };
+        updateThinkingText();
+
+        const intervalId = setInterval(() => {
+            if (!indicator.isConnected) {
+                clearInterval(intervalId);
+                return;
+            }
+            updateThinkingText();
+        }, 2000);
+
+        this._thinkingIndicatorIntervals.set(messageDiv, intervalId);
+    }
+
+    stopThinkingIndicator(messageDiv) {
+        if (!messageDiv) return;
+        const intervalId = this._thinkingIndicatorIntervals.get(messageDiv);
+        if (intervalId) {
+            clearInterval(intervalId);
+            this._thinkingIndicatorIntervals.delete(messageDiv);
+        }
+    }
+
+    stopAllThinkingIndicators() {
+        this._thinkingIndicatorIntervals.forEach(intervalId => clearInterval(intervalId));
+        this._thinkingIndicatorIntervals.clear();
+    }
+
+    initializeChatDragScroll() {
+        if (!this.messagesContainer || this._chatDragScrollInitialized) return;
+        this._chatDragScrollInitialized = true;
+
+        let isDragging = false;
+        let startY = 0;
+        let startScrollTop = 0;
+        let activePointerId = null;
+
+        const endDrag = (event) => {
+            if (!isDragging) return;
+            if (event && activePointerId !== null && event.pointerId !== activePointerId) return;
+
+            isDragging = false;
+            this.messagesContainer.classList.remove('drag-scrolling');
+
+            if (activePointerId !== null && this.messagesContainer.releasePointerCapture) {
+                try {
+                    this.messagesContainer.releasePointerCapture(activePointerId);
+                } catch (_) {
+                    // ignore release errors when pointer was already released
+                }
+            }
+
+            activePointerId = null;
+        };
+
+        this.messagesContainer.addEventListener('pointerdown', (event) => {
+            if (event.pointerType === 'mouse' && event.button !== 0) return;
+
+            isDragging = true;
+            activePointerId = event.pointerId;
+            startY = event.clientY;
+            startScrollTop = this.messagesContainer.scrollTop;
+            this.messagesContainer.classList.add('drag-scrolling');
+
+            if (this.messagesContainer.setPointerCapture) {
+                this.messagesContainer.setPointerCapture(event.pointerId);
+            }
+
+            event.preventDefault();
+        });
+
+        this.messagesContainer.addEventListener('pointermove', (event) => {
+            if (!isDragging || event.pointerId !== activePointerId) return;
+
+            const deltaY = event.clientY - startY;
+            this.messagesContainer.scrollTop = startScrollTop - deltaY;
+            event.preventDefault();
+        });
+
+        this.messagesContainer.addEventListener('pointerup', endDrag);
+        this.messagesContainer.addEventListener('pointercancel', endDrag);
+        this.messagesContainer.addEventListener('pointerleave', endDrag);
     }
     
     scrollToBottom() {
@@ -1369,6 +1498,7 @@ class ChatManager {
             this._typewriterIntervals = [];
             console.log('✅ Typewriter intervals limpos');
         }
+        this.stopAllThinkingIndicators();
         
         ChatManager.instance = null;
         console.log('✅ ChatManager destruído');

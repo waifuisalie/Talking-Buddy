@@ -49,8 +49,8 @@ html, body {
 
 /* Scrollbar personalizada */
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 12px;
+    height: 12px;
 }
 
 ::-webkit-scrollbar-track {
@@ -69,7 +69,7 @@ html, body {
 
 /* Firefox */
 * {
-    scrollbar-width: thin;
+    scrollbar-width: auto;
     scrollbar-color: var(--accent-color) var(--bg-dark);
 }
 
@@ -375,6 +375,73 @@ html, body {
 
 .form-group {
     margin-bottom: 20px;
+}
+
+.new-user-form-box {
+    width: 840px;
+}
+
+.new-user-form-box .box-header {
+    padding: 14px;
+    font-size: 1.25rem;
+    letter-spacing: 2px;
+}
+
+.new-user-form-box .box-content {
+    padding: 14px 18px;
+}
+
+.new-user-form-box .form-group {
+    margin-bottom: 12px;
+}
+
+.new-user-form-box .form-group-label-spaced {
+    margin-top: 12px;
+}
+
+.new-user-form-box label {
+    margin-bottom: 6px;
+    font-size: 0.8rem;
+}
+
+.new-user-form-box input[type="text"] {
+    min-height: 42px;
+    padding: 8px 10px;
+    font-size: 0.92rem;
+}
+
+.new-user-form-box .btn-grid-2col {
+    gap: 12px;
+}
+
+.new-user-form-box .btn-grid-2col .btn,
+.new-user-form-box .btn-grid-2col .btn-selection-trigger {
+    min-height: 70px;
+    padding: 10px;
+    gap: 5px;
+}
+
+.new-user-form-box .btn-selection-trigger .btn-label {
+    font-size: 0.75rem;
+    line-height: 1.15;
+}
+
+.new-user-form-box .btn-selection-trigger .btn-value {
+    font-size: 0.85rem;
+    line-height: 1.15;
+}
+
+.new-user-form-box .btn-stack {
+    gap: 0.65rem;
+    padding: 0.5rem 0 0;
+    max-width: 520px;
+}
+
+.new-user-form-box .btn {
+    min-height: 50px;
+    padding: 10px 20px;
+    margin: 6px 4px;
+    font-size: 0.92rem;
 }
 
 .form-group-spaced {
@@ -1312,20 +1379,31 @@ select {
     flex-direction: column;
     gap: 12px;
     max-height: calc(60vh - 100px); /* Ajustado proporcionalmente */
+    cursor: grab;
+    touch-action: pan-y;
+    overscroll-behavior: contain;
+    scrollbar-width: auto;
+    scrollbar-color: var(--accent-color) rgba(0, 0, 0, 0.3);
+}
+
+.chat-messages.drag-scrolling {
+    cursor: grabbing;
 }
 
 /* Custom scrollbar for chat */
 .chat-messages::-webkit-scrollbar {
-    width: 8px;
+    width: 16px;
 }
 
 .chat-messages::-webkit-scrollbar-track {
     background: rgba(0, 0, 0, 0.3);
+    border-left: 1px solid rgba(0, 255, 0, 0.2);
 }
 
 .chat-messages::-webkit-scrollbar-thumb {
     background: var(--accent-color);
-    border-radius: 4px;
+    border-radius: 8px;
+    border: 3px solid rgba(0, 0, 0, 0.45);
 }
 
 .chat-messages::-webkit-scrollbar-thumb:hover {
@@ -1859,4 +1937,3 @@ svg.battery-charging.hidden {
         font-size: 0.95rem;
     }
 }
-

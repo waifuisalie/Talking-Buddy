@@ -44,7 +44,10 @@ const i18n = (function() {
             messages: {
                 welcome_no_name: 'Olá! Sou seu assistente virtual. Como posso ajudá-lo(a) hoje?',
                 welcome_with_name: 'Olá, {name}!\n\nSou seu assistente virtual. Como posso ajudá-lo(a) hoje?',
-                thinking: 'Pensando...'
+                thinking: 'Pensando...',
+                thinking_alt_1: 'Analisando sua pergunta...',
+                thinking_alt_2: 'Conectando ideias...',
+                thinking_alt_3: 'Preparando uma boa resposta...'
             },
             
             // Teclado Virtual
@@ -92,7 +95,10 @@ const i18n = (function() {
             messages: {
                 welcome_no_name: 'Hello! I\'m your virtual assistant. How can I help you today?',
                 welcome_with_name: 'Hello, {name}!\n\nI\'m your virtual assistant. How can I help you today?',
-                thinking: 'Thinking...'
+                thinking: 'Thinking...',
+                thinking_alt_1: 'Analyzing your question...',
+                thinking_alt_2: 'Connecting ideas...',
+                thinking_alt_3: 'Preparing a good answer...'
             },
             
             // Virtual Keyboard
@@ -140,7 +146,10 @@ const i18n = (function() {
             messages: {
                 welcome_no_name: '¡Hola! Soy tu asistente virtual. ¿Cómo puedo ayudarte hoy?',
                 welcome_with_name: '¡Hola, {name}!\n\nSoy tu asistente virtual. ¿Cómo puedo ayudarte hoy?',
-                thinking: 'Pensando...'
+                thinking: 'Pensando...',
+                thinking_alt_1: 'Analizando tu pregunta...',
+                thinking_alt_2: 'Conectando ideas...',
+                thinking_alt_3: 'Preparando una buena respuesta...'
             },
             
             // Teclado Virtual
