@@ -165,6 +165,7 @@ class OpenWakeWordManager:
         """
         if not self.running:
             return
+        time.sleep(0.15)
         self._stream_released.clear()
         self._is_paused = False
 
@@ -240,6 +241,13 @@ class OpenWakeWordManager:
 
                 # --- Inferência ---
                 try:
+                    try:
+                        available = stream.get_read_available()
+                    except Exception:
+                        available = 0
+                    if available < native_chunk:
+                        time.sleep(0.005)
+                        continue
                     audio_data = stream.read(native_chunk, exception_on_overflow=False)
                 except OSError as e:
                     print(f"⚠️  [OWW] Erro de leitura do mic: {e}")

@@ -535,21 +535,29 @@ class WhisperSTT:
             print("❌ PyAudio not available")
             return False
 
+        _rec_t0 = time.monotonic()
+        def _rlog(phase):
+            print(f"⏱️  [TIMING] record_utterance {phase} T+{time.monotonic() - _rec_t0:.3f}s")
+        _rlog("entry")
+
         # Acquire lock — waits if calibration is running (max 3s; calibration is at most 2s)
         if not self._audio_lock.acquire(blocking=True, timeout=3.0):
             print("⚠️  [VAD] Could not acquire audio lock")
             return False
+        _rlog("lock_acquired")
 
         audio = None
         stream = None
         try:
             with _suppress_audio_init_noise():
                 audio = pyaudio.PyAudio()
+            _rlog("pyaudio_init")
 
             # Resolve a safe input device index (handles stale capture_device values)
             if hasattr(self.config, 'capture_device_name') and self.config.capture_device_name:
                 os.environ['AUDIODEV'] = self.config.capture_device_name
             device_index = self._resolve_input_device_index_with_audio(audio, context="VAD")
+            _rlog(f"device_resolved idx={device_index}")
 
             sample_rate = self.config.sample_rate
             chunk_size = self.config.chunk_size
@@ -579,6 +587,7 @@ class WhisperSTT:
                 stream_kwargs['input_device_index'] = device_index
 
             stream = audio.open(**stream_kwargs)
+            _rlog(f"stream_open rate={sample_rate} chunk={chunk_size}")
 
             chunks_per_second = sample_rate / chunk_size
             rms_window_size = max(3, int(0.2 * chunks_per_second))
@@ -594,23 +603,95 @@ class WhisperSTT:
             last_rms_print = 0.0
             rms_print_interval = 0.5  # Print RMS every 0.5s when debug_mode is on
 
-            # Discard the first 700ms of audio to let any feedback sounds (e.g.
-            # chat_open beep) decay before VAD starts listening.
-            discard_chunks = int(0.7 * sample_rate / chunk_size)
-            for _ in range(discard_chunks):
-                stream.read(chunk_size, exception_on_overflow=False)
+            # Background reader thread: polls get_read_available() so we never
+            # block inside stream.read(). This guarantees max_duration is always
+            # honoured even if the USB mic stalls.
+            _audio_queue = queue.Queue(maxsize=500)
+            _reader_stop = threading.Event()
+
+            def _audio_reader():
+                _no_data_since = None
+                _stall_warned = False
+                _recovery_attempted = False
+                while not _reader_stop.is_set():
+                    try:
+                        try:
+                            available = stream.get_read_available()
+                        except Exception as e:
+                            print(f"⚠️  [VAD] Reader: get_read_available() failed: {e} "
+                                  f"(active={stream.is_active()}, stopped={stream.is_stopped()})")
+                            break
+                        if available < chunk_size:
+                            now = time.monotonic()
+                            if _no_data_since is None:
+                                _no_data_since = now
+                            stall_dur = now - _no_data_since
+                            if stall_dur >= 2.0 and not _stall_warned:
+                                _stall_warned = True
+                                print(f"⚠️  [VAD] Reader: mic stall detected ({stall_dur:.1f}s no data) "
+                                      f"active={stream.is_active()} stopped={stream.is_stopped()}")
+                            if stall_dur >= 3.0 and not _recovery_attempted:
+                                _recovery_attempted = True
+                                print(f"🔄 [VAD] Reader: attempting ALSA recovery (stop+start)...")
+                                try:
+                                    stream.stop_stream()
+                                    stream.start_stream()
+                                    print(f"✅ [VAD] Reader: ALSA recovery succeeded")
+                                    _no_data_since = None
+                                    _stall_warned = False
+                                except Exception as re:
+                                    print(f"❌ [VAD] Reader: ALSA recovery failed: {re}")
+                                    break
+                            time.sleep(0.005)
+                            continue
+                        _no_data_since = None
+                        _stall_warned = False
+                        _recovery_attempted = False
+                        data = stream.read(chunk_size, exception_on_overflow=False)
+                        try:
+                            _audio_queue.put_nowait(data)
+                        except queue.Full:
+                            pass
+                    except Exception as e:
+                        print(f"⚠️  [VAD] Reader error: {e} "
+                              f"(active={stream.is_active()}, stopped={stream.is_stopped()})")
+                        break
+
+            _reader_thread = threading.Thread(target=_audio_reader, daemon=True, name="VADAudioReader")
+            _reader_thread.start()
+            _rlog("reader_thread_started")
+
+            # Discard first ~100ms to flush stale ALSA buffer contents.
+            discard_chunks = int(0.1 * sample_rate / chunk_size)
+            _rlog(f"discard_start chunks={discard_chunks}")
+            for i in range(discard_chunks):
+                try:
+                    _audio_queue.get(timeout=1.0)
+                except queue.Empty:
+                    break
+                if i == 0:
+                    _rlog("first_discard_read_returned")
+            _rlog("discard_end")
 
             print("👂 [VAD] Waiting for speech...")
             if self.debug_mode:
                 print(f"🔧 [VAD] Threshold: {silence_threshold} | Silence limit: {silence_duration_limit}s")
 
+            _first_loop_read_logged = False
             while True:
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
                     print(f"⏱️  [VAD] Max duration ({max_duration}s) reached")
+                    _rlog(f"max_duration_reached elapsed={elapsed:.2f}")
                     break
 
-                audio_data = stream.read(chunk_size, exception_on_overflow=False)
+                try:
+                    audio_data = _audio_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if not _first_loop_read_logged:
+                    _rlog("first_loop_read_returned")
+                    _first_loop_read_logged = True
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
                 try:
@@ -633,6 +714,7 @@ class WhisperSTT:
                 if rms > silence_threshold:
                     if not recording:
                         print("🗣️  [VAD] Speech detected, recording...")
+                        _rlog("speech_detected")
                         recording = True
                     frames.append(audio_data)
                     last_speech_time = time.time()
@@ -641,13 +723,22 @@ class WhisperSTT:
                     silence_elapsed = time.time() - last_speech_time
                     if silence_elapsed >= silence_duration_limit:
                         print(f"🤐 [VAD] Silence detected ({silence_elapsed:.1f}s), done")
+                        _rlog(f"silence_detected silence_elapsed={silence_elapsed:.2f}")
                         break
 
+            # Shutdown reader: stop_stream() first to unblock any in-progress
+            # read(), then join, then close. Wrong order causes heap corruption.
+            _reader_stop.set()
+            _rlog("loop_exit stream_close_start")
             stream.stop_stream()
+            _reader_thread.join(timeout=2.0)
+            if _reader_thread.is_alive():
+                print("⚠️  [VAD] Reader thread did not exit cleanly after stop_stream()")
             stream.close()
             stream = None
             audio.terminate()
             audio = None
+            _rlog("stream_close_end")
 
             if not frames:
                 print("⚠️  [VAD] No speech detected")
@@ -668,15 +759,25 @@ class WhisperSTT:
                 wf.writeframes(b''.join(frames))
 
             print(f"💾 [VAD] Saved {duration:.1f}s of audio to {output_path}")
+            _rlog(f"wav_saved duration={duration:.2f}s")
             return True
 
         except Exception as e:
             print(f"❌ [VAD] Error during recording: {e}")
+            _rlog(f"exception {type(e).__name__}")
             return False
         finally:
+            if '_reader_stop' in locals():
+                _reader_stop.set()
+            if '_reader_thread' in locals() and _reader_thread.is_alive():
+                if stream:
+                    try:
+                        stream.stop_stream()
+                    except Exception:
+                        pass
+                _reader_thread.join(timeout=2.0)
             if stream:
                 try:
-                    stream.stop_stream()
                     stream.close()
                 except Exception:
                     pass
@@ -686,6 +787,7 @@ class WhisperSTT:
                 except Exception:
                     pass
             self._audio_lock.release()
+            _rlog("finally_done lock_released")
 
     def calibrate_vad(self, duration: float = 2.0) -> Optional[float]:
         """Sample ambient noise and update silence_threshold adaptively.
@@ -739,13 +841,28 @@ class WhisperSTT:
             stream = audio.open(**stream_kwargs)
 
             n_chunks = int(duration * sample_rate / chunk_size)
+            deadline = time.monotonic() + duration + 3.0
             rms_values = []
             for _ in range(n_chunks):
-                data = stream.read(chunk_size, exception_on_overflow=False)
-                arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
-                rms_sq = np.mean(arr ** 2)
-                if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
-                    rms_values.append(np.sqrt(rms_sq))
+                while True:
+                    if time.monotonic() > deadline:
+                        print("⚠️  [VAD] Calibration aborted — mic stall during read")
+                        break
+                    try:
+                        available = stream.get_read_available()
+                    except Exception:
+                        available = 0
+                    if available >= chunk_size:
+                        break
+                    time.sleep(0.005)
+                else:
+                    data = stream.read(chunk_size, exception_on_overflow=False)
+                    arr = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+                    rms_sq = np.mean(arr ** 2)
+                    if not (np.isnan(rms_sq) or np.isinf(rms_sq) or rms_sq < 0):
+                        rms_values.append(np.sqrt(rms_sq))
+                    continue
+                break
 
             stream.stop_stream()
             stream.close()

@@ -276,11 +276,11 @@ class ChatManager {
         }
     }
     
-    showChatInterface() {
+    showChatInterface(options = {}) {
         if (!this.chatActive && this.chatInterface) {
-            // TOCA SOM DE ABERTURA DO CHAT (apenas se estava fechado)
-            this.playFeedbackSound('chat_open');
-            
+            // Beep de abertura removido — o único beep acontece no backend,
+            // dentro de record_and_transcribe, logo antes de abrir o mic.
+
             this.chatInterface.classList.remove('hidden');
             this.chatInterface.classList.remove('closing');
             this.chatActive = true;
@@ -964,25 +964,24 @@ class ChatManager {
         
         console.log('🔔 Wake word detectado - iniciando ação');
 
-        // Tocar som de abertura do chat
-        console.log('🔊 Tocando som chat_open...');
-        this.playFeedbackSound('chat_open');
+        // O beep agora é tocado pelo backend (sync) em /api/voice/record_and_transcribe,
+        // logo antes de abrir o microfone. Não precisamos mais tocar aqui e nem esperar
+        // o timeout de 600ms.
 
         // Abrir chat se fechado (funciona com ou sem RFID — sem RFID usa modo anônimo)
         if (!this.chatActive) {
             console.log('📖 Abrindo chat...');
-            this.showChatInterface();
+            this.showChatInterface({ silent: true });
         } else {
             console.log('ℹ️  Chat já aberto');
         }
-        
-        // Ativar microfone automaticamente após pequeno delay
-        setTimeout(() => {
-            if (this.micButton && !this.isRecording) {
-                console.log('🎤 Ativando microfone automaticamente...');
-                this.micButton.click();
-            }
-        }, 600); // 600ms - após som tocar
+
+        // Ativa o microfone imediatamente — o backend toca o beep de forma bloqueante
+        // antes de começar a gravar, então não há corrida entre som e captura.
+        if (this.micButton && !this.isRecording) {
+            console.log('🎤 Ativando microfone automaticamente...');
+            this.micButton.click();
+        }
     }
     
     loadUserProfile(rfid) {
