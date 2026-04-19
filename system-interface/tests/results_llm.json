@@ -1,0 +1,43 @@
+{
+  "cold_start": {
+    "ttft_s": 3.081,
+    "total_time_s": 8.08,
+    "tokens_per_sec": 11.57,
+    "token_count": 57,
+    "ram_delta_mb": 60.0,
+    "ram_target_ok": true
+  },
+  "warm_inference": {
+    "runs": [
+      {
+        "text": "A inteligência artificial (IA) é a capacidade de máquinas imitarem a inteligência humana, permitindo que elas aprendam, resolvam problemas e tomem decisões. Em resumo, é criar sistemas que simulam a inteligência humana para realizar tarefas complexas.",
+        "ttft_s": 0.717,
+        "total_time_s": 5.582,
+        "tokens_per_sec": 11.22,
+        "token_count": 54
+      },
+      {
+        "text": "A inteligência artificial (IA) é o desenvolvimento de sistemas que simulam a inteligência humana, permitindo que máquinas aprendam, raciocinem e resolvam problemas. Em resumo, é a criação de máquinas capazes de realizar tarefas que normalmente exigem inteligência humana.",
+        "ttft_s": 0.639,
+        "total_time_s": 5.668,
+        "tokens_per_sec": 11.55,
+        "token_count": 57
+      },
+      {
+        "text": "A inteligência artificial (IA) é a capacidade de máquinas imitarem a inteligência humana, permitindo que elas aprendam, raciocinem e resolvam problemas. Em essência, é criar sistemas que podem realizar tarefas que normalmente exigem inteligência humana.",
+        "ttft_s": 0.659,
+        "total_time_s": 5.595,
+        "tokens_per_sec": 11.38,
+        "token_count": 55
+      }
+    ],
+    "avg_ttft_s": 0.672,
+    "avg_tokens_per_sec": 11.38
+  },
+  "blocking_reference": {
+    "text": "A inteligência artificial é a capacidade de máquinas de simular a inteligência humana, permitindo que elas aprendam, raciocinem e resolvam problemas. Em resumo, é a criação de sistemas que podem realizar tarefas que normalmente exigem inteligência humana.",
+    "total_time_s": 5.146,
+    "eval_count": 54,
+    "tokens_per_sec": 12.22
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "rtf_target": 0.1,
+  "supertonic": [
+    {
+      "label": "curta",
+      "text": "Olá! Como posso ajudar você hoje?",
+      "synth_time_s": 0.526,
+      "audio_duration_s": 3.135,
+      "rtf": 0.1679,
+      "passed": false
+    },
+    {
+      "label": "média",
+      "text": "O assistente virtual está pronto para responder suas perguntas sobre o projeto.",
+      "synth_time_s": 0.872,
+      "audio_duration_s": 5.921,
+      "rtf": 0.1472,
+      "passed": false
+    },
+    {
+      "label": "longa",
+      "text": "A inteligência artificial local roda completamente no Raspberry Pi 5 sem precisar de conexão com a internet, garantindo privacidade total.",
+      "synth_time_s": 1.534,
+      "audio_duration_s": 10.519,
+      "rtf": 0.1458,
+      "passed": false
+    },
+    {
+      "label": "números",
+      "text": "A temperatura está em vinte e cinco graus e a bateria em noventa por cento.",
+      "synth_time_s": 0.866,
+      "audio_duration_s": 5.921,
+      "rtf": 0.1462,
+      "passed": false
+    },
+    {
+      "label": "pergunta",
+      "text": "Você gostaria de saber mais sobre as funcionalidades disponíveis no sistema de voz?",
+      "synth_time_s": 0.871,
+      "audio_duration_s": 5.921,
+      "rtf": 0.1471,
+      "passed": false
+    }
+  ],
+  "piper": [
+    {
+      "label": "curta",
+      "text": "Olá! Como posso ajudar você hoje?",
+      "synth_time_s": 0.652,
+      "audio_duration_s": 2.536,
+      "rtf": 0.2572,
+      "passed": false
+    },
+    {
+      "label": "média",
+      "text": "O assistente virtual está pronto para responder suas perguntas sobre o projeto.",
+      "synth_time_s": 0.933,
+      "audio_duration_s": 4.391,
+      "rtf": 0.2124,
+      "passed": false
+    },
+    {
+      "label": "longa",
+      "text": "A inteligência artificial local roda completamente no Raspberry Pi 5 sem precisar de conexão com a internet, garantindo privacidade total.",
+      "synth_time_s": 1.455,
+      "audio_duration_s": 8.431,
+      "rtf": 0.1726,
+      "passed": false
+    },
+    {
+      "label": "números",
+      "text": "A temperatura está em vinte e cinco graus e a bateria em noventa por cento.",
+      "synth_time_s": 0.917,
+      "audio_duration_s": 4.217,
+      "rtf": 0.2173,
+      "passed": false
+    },
+    {
+      "label": "pergunta",
+      "text": "Você gostaria de saber mais sobre as funcionalidades disponíveis no sistema de voz?",
+      "synth_time_s": 0.931,
+      "audio_duration_s": 4.449,
+      "rtf": 0.2092,
+      "passed": false
+    }
+  ]
+}

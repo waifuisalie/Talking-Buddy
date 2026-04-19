@@ -1,0 +1,40 @@
+{
+  "results": [
+    {
+      "phrase": "Olá, tudo bem com você? Fico feliz em poder ajudar hoje.",
+      "transcribed": "Olá, tudo bem com você? Fico feliz em poder ajudar hoje?",
+      "audio_duration_s": 4.458,
+      "transcription_time_s": 0.99,
+      "passed": true
+    },
+    {
+      "phrase": "O assistente virtual TalkingBuddy está funcionando e pronto para responder.",
+      "transcribed": "O assistente virtual Talking Buddy está funcionando, pronto para responder.",
+      "audio_duration_s": 5.364,
+      "transcription_time_s": 1.202,
+      "passed": true
+    },
+    {
+      "phrase": "Qual é a temperatura em São Paulo? Vai chover mais tarde?",
+      "transcribed": "Qual é a temperatura em São Paulo? Vai chover mais tarde.",
+      "audio_duration_s": 4.11,
+      "transcription_time_s": 0.983,
+      "passed": true
+    },
+    {
+      "phrase": "Explique de forma simples como funciona a inteligência artificial.",
+      "transcribed": "Explique de forma simples como funciona a inteligência artificial.",
+      "audio_duration_s": 4.807,
+      "transcription_time_s": 0.932,
+      "passed": true
+    },
+    {
+      "phrase": "Obrigado pela sua ajuda durante nossa conversa. Foi muito útil.",
+      "transcribed": "Obrigado pela sua ajuda durante nossa conversa. Foi muito útil.",
+      "audio_duration_s": 4.737,
+      "transcription_time_s": 1.064,
+      "passed": true
+    }
+  ],
+  "target_s": 2.0
+}

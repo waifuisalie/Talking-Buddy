@@ -46,6 +46,9 @@ test_assistant.db
 Thumbs.db
 *.log
 
+# Session logs
+logs/
+
 # Backup
 *.backup
 *.bak
