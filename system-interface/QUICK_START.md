@@ -1,177 +1,95 @@
-# 🚀 Guia Rápido de Início
+# Quick Start
 
-## TL;DR - Comandos Essenciais
+## TL;DR
+
+On a fresh Pi, run `../rpi5-chatbot/setup.sh` once. Then to launch:
 
 ```bash
-# 1. Instalar dependências
-pip install -r requirements.txt
-
-# 2. Configurar (se necessário)
-nano .env
-
-# 3. Validar instalação
-python3 test_voice_system.py
-
-# 4. Iniciar Ollama (se não estiver rodando)
-ollama serve &
-ollama pull gemma3:1b
-
-# 5. Iniciar aplicação
-python3 src/app.py
-
-# 6. Acessar no navegador
-# http://localhost:5000
+cd system-interface
+bash start.sh
 ```
 
----
+Open **http://localhost:5000**.
 
-## 📋 Checklist Pré-Execução
-
-### No Raspberry Pi
-
-- [ ] Ollama instalado e rodando (`ollama serve`)
-- [ ] Modelo `gemma3:1b` baixado (`ollama pull gemma3:1b`)
-- [ ] Piper TTS instalado (binary + modelo pt_BR)
-- [ ] ALSA configurado (áudio funcionando)
-- [ ] Dependências Python instaladas (`pip install -r requirements.txt`)
-- [ ] Arquivo `.env` configurado (copiar de `.env.example`)
+`start.sh` handles Ollama startup, model warmup, VAD calibration, and Flask.
 
 ---
 
-## 🎯 Fluxo de Uso
+## Pre-flight checklist
 
-### 1. Login
-- Aproximar cartão RFID
-- Aguardar saudação aparecer
-- Chat NÃO abre automaticamente
-
-### 2. Abrir Chat
-- Clicar em qualquer lugar no robô
-- Chat abre em modo compacto
-- Histórico carrega automaticamente
-
-### 3. Conversar
-- Digitar mensagem no campo de texto
-- Pressionar Enter ou clicar em Enviar
-- Aguardar resposta (texto + áudio sincronizados)
-
-### 4. Timers
-- **5 min** sem interação → Logout automático
-- **10 min** sem interação → Robô sonolento
-- **15 min** sem interação → Robô dormindo
-- Durante conversa: timers pausam automaticamente
+- [ ] Ollama running (`systemctl --user status ollama`)
+- [ ] Default model pulled (`ollama list | grep gemma3`)
+- [ ] Personality models created (`ollama list | grep ptbr-`)
+- [ ] ALSA devices reachable (`python test_audio_devices.py`)
+- [ ] `.env` copied from `.env.example` and adjusted for local audio devices
+- [ ] SPI enabled for RFID (`ls /dev/spidev*`)
+- [ ] User in `spi`, `gpio`, `dialout`, `audio` groups
 
 ---
 
-## 🔧 Configurações Importantes (.env)
+## Usage flow
+
+1. **Login** — tap RFID card; greeting appears on the robot screen.
+2. **Open chat** — click the robot to reveal the chat panel; history loads.
+3. **Talk** — say "hey buddy" (wake word) or type; response streams back as text + audio.
+4. **Timers** — inactivity tiers pause during conversation and resume when idle.
+
+---
+
+## Key `.env` settings
 
 ```bash
-# Modelo de IA
 OLLAMA_MODEL=gemma3:1b
+OLLAMA_URL=http://localhost:11434/api/chat
 
-# Piper TTS
-PIPER_BINARY=~/piper/piper/piper
-PIPER_MODEL=pt_BR-faber-medium.onnx
-PIPER_MODEL_PATH=~/piper/piper/
+AUDIO_DEVICE=plughw:3,0
+MICROPHONE_DEVICE=plughw:2,0
 
-# Áudio (ajustar conforme seu hardware)
-AUDIO_DEVICE=default  # Ou: hw:0,0, plughw:0,0
+SUPERTONIC_LANGUAGE=pt
+SUPERTONIC_PERSONALITY=neutral
+
+WAKE_WORD_ENABLED=true
+WAKE_WORD_DEBOUNCE_TIME=2.0
 ```
 
 ---
 
-## 🧪 Teste Rápido da API
+## API smoke tests
 
 ```bash
-# 1. Status do sistema
 curl http://localhost:5000/api/voice/status
 
-# 2. Enviar mensagem
 curl -X POST http://localhost:5000/api/chat/send \
   -H "Content-Type: application/json" \
   -d '{"message": "Olá!", "rfid": "TEST001", "user_id": 1}'
 
-# 3. Ver histórico
 curl http://localhost:5000/api/chat/history/TEST001
 ```
 
 ---
 
-## 🐛 Troubleshooting Rápido
+## Troubleshooting
 
-### "Voice system not available"
+**Voice system not available** — check Ollama:
 ```bash
-# Verificar Ollama
 curl http://localhost:11434/api/tags
-
-# Se não responder:
-ollama serve &
+systemctl --user start ollama
 ```
 
-### Áudio não reproduz
+**No audio output** — list devices and update `.env`:
 ```bash
-# Listar dispositivos ALSA
 aplay -L
-
-# Testar áudio
 speaker-test -c2 -t wav
-
-# Ajustar .env
-AUDIO_DEVICE=hw:0,0
 ```
 
-### Histórico não carrega
-```bash
-# Verificar tabela
-sqlite3 data/users.db ".schema conversation_history"
+**Wake word not firing** — confirm the mic referenced by `MICROPHONE_DEVICE` is the one you speak into; watch `openwakeword_manager` logs on boot.
 
-# Verificar dados
-sqlite3 data/users.db "SELECT COUNT(*) FROM conversation_history;"
-```
+**RFID unresponsive** — check SPI (`ls /dev/spidev*`) and that your user is in `spi` + `gpio` groups.
 
 ---
 
-## 📚 Documentação Completa
+## Expected performance (RPi5, 8 GB)
 
-- **VOICE_SYSTEM_README.md** - Documentação técnica detalhada
-- **IMPLEMENTATION_SUMMARY.md** - Resumo da implementação
-- **test_voice_system.py** - Script de validação automática
-
----
-
-## ⚡ Performance Esperada
-
-**Raspberry Pi 4 (4GB RAM):**
-- Tempo de resposta: 2-5 segundos (Ollama + TTS)
-- Uso de RAM: ~1.2GB (com gemma3:1b)
-- Uso de CPU: 60-80% durante processamento
-
-**Raspberry Pi 5 (8GB RAM):**
-- Tempo de resposta: 1-3 segundos
-- Uso de RAM: ~1.2GB
-- Uso de CPU: 40-60% durante processamento
-
----
-
-## 🎓 Logs Úteis
-
-### Backend (Terminal)
-```
-✅ Voice system initialized
-🔊 Playing audio: /static/audio/tts_1234567890.wav
-⚠️ Voice system not available: [erro]
-```
-
-### Frontend (F12 → Console)
-```
-🤖 Robô clicado! Abrindo chat...
-📜 Carregando histórico de conversas
-🔄 [syncTextWithAudio] Sincronizando...
-⏰ Logout automático por inatividade (5 min)
-```
-
----
-
-**Pronto para usar! 🎉**
-
-Se todos os testes passarem em `test_voice_system.py`, o sistema está 100% funcional.
+- Response: 1–3 s (streaming starts sub-second)
+- RAM: ~1.2 GB with `gemma3:1b`
+- CPU: 40–60% during generation

@@ -1,14 +1,5 @@
+"""Install-time helpers consumed by system-interface via sys.path.
+
+Runtime code lives in ../system-interface/. Only `config.WhisperConfig` and
+`whisper_stt.WhisperSTT` are imported from here (see system-interface/src/app.py).
 """
-Voice Chatbot Package
-
-A modular voice-to-voice chatbot system integrating:
-- whisper.cpp for speech-to-text
-- Ollama for language model inference
-- Piper for text-to-speech
-"""
-
-from .voice_chatbot import VoiceChatbot
-from .config import ChatbotConfig
-
-__version__ = "0.1.0"
-__all__ = ["VoiceChatbot", "ChatbotConfig"]

@@ -46,7 +46,14 @@ test_assistant.db
 Thumbs.db
 *.log
 
+# Session logs
+logs/
+
 # Backup
 *.backup
 *.bak
 *.old
+
+# Orphan artifacts
+test_*.html
+image*.png

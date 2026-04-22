@@ -33,6 +33,11 @@ Thumbs.db
 
 # Logs
 *.log
+*_log*.txt
+start_log*.txt
+
+# Scratch / nested clones
+desenvolvimento/
 
 # Test outputs
 test_*.wav

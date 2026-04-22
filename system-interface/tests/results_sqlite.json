@@ -1,0 +1,50 @@
+{
+  "target_p95_ms": 50,
+  "results": [
+    {
+      "history_size": 8,
+      "runs": 50,
+      "median_ms": 0.034,
+      "mean_ms": 0.036,
+      "p95_ms": 0.043,
+      "p99_ms": 0.107,
+      "passed": true
+    },
+    {
+      "history_size": 20,
+      "runs": 50,
+      "median_ms": 0.036,
+      "mean_ms": 0.037,
+      "p95_ms": 0.041,
+      "p99_ms": 0.054,
+      "passed": true
+    },
+    {
+      "history_size": 50,
+      "runs": 50,
+      "median_ms": 0.043,
+      "mean_ms": 0.044,
+      "p95_ms": 0.047,
+      "p99_ms": 0.057,
+      "passed": true
+    },
+    {
+      "history_size": 100,
+      "runs": 50,
+      "median_ms": 0.054,
+      "mean_ms": 0.055,
+      "p95_ms": 0.057,
+      "p99_ms": 0.069,
+      "passed": true
+    },
+    {
+      "history_size": 200,
+      "runs": 50,
+      "median_ms": 0.077,
+      "mean_ms": 0.078,
+      "p95_ms": 0.083,
+      "p99_ms": 0.097,
+      "passed": true
+    }
+  ]
+}

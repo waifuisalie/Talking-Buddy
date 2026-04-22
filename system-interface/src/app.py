@@ -256,6 +256,18 @@ killall_rfid_processes()
 print()
 
 
+# ========== SESSION TELEMETRY ==========
+from telemetry import setup_session_log, TelemetryMonitor, ilog as _ilog
+
+_LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs')
+_session_log_path = setup_session_log(_LOG_DIR)
+print(f"📋 Log de sessão: {_session_log_path}")
+
+
+def ilog(component: str, msg: str):
+    _ilog(component, msg)
+
+
 # ========== SSE MANAGER ==========
 from sse_manager import SSEManager
 sse_manager = SSEManager()
@@ -483,6 +495,12 @@ if not temp_db.has_any_admin():
     sys.exit(1)
 temp_db.close()
 
+# ========== START TELEMETRY MONITOR ==========
+_telemetry_monitor = TelemetryMonitor(
+    battery_monitor=battery_monitor if BATTERY_AVAILABLE else None
+)
+_telemetry_monitor.start()
+ilog("SESSION", f"Ollama: {os.getenv('OLLAMA_MODEL', 'gemma3:1b')} | Whisper: {os.getenv('WHISPER_MODEL', 'ggml-base.bin')} | TTS: supertonic")
 
 # ========== DECORATORS ==========
 
@@ -670,19 +688,33 @@ def rfid_start():
             print(f"[RFID Start] ❌ ERRO: {error_msg}")
             return jsonify({'success': False, 'error': error_msg})
         
-        # Inicia novo processo COM SUDO (essencial para acesso GPIO)
+        # Inicia novo processo COM SUDO (essencial para acesso SPI/GPIO)
+        # Usa o mesmo Python do venv (garante spidev disponível) e captura
+        # stderr para que erros apareçam no log de sessão via tee.
         env = os.environ.copy()
-        
+        venv_python = sys.executable  # python do venv ativo
+
         print(f"[RFID Start] 🚀 Iniciando novo processo: {script_path}")
+        print(f"[RFID Start] 🐍 Python: {venv_python}")
         rfid_process = subprocess.Popen(
-            ['sudo', '/usr/bin/python3', script_path],
-            stdout=None,  # ← Mostra logs em tempo real
-            stderr=None,  # ← Mostra erros em tempo real
+            ['sudo', venv_python, '-u', script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             cwd=os.path.dirname(__file__),
             env=env
         )
+
+        # Thread que encaminha saída do subprocess para o log de sessão
+        def _forward_rfid_output(proc):
+            for raw in proc.stdout:
+                line = raw.decode('utf-8', errors='replace').rstrip()
+                if line:
+                    print(f"[RFID] {line}", flush=True)
+        threading.Thread(target=_forward_rfid_output, args=(rfid_process,),
+                         daemon=True, name="RFIDOutputForwarder").start()
+
         print(f"[RFID Start] ✅ Processo iniciado com PID: {rfid_process.pid}")
-        
+
         # Verificar se o processo iniciou corretamente
         time.sleep(1)  # Dar mais tempo para inicializar
         if rfid_process.poll() is not None:
@@ -1033,7 +1065,10 @@ Seja direto, objetivo e conciso."""
 
             history_manager = ConversationHistory(db)
             history_manager.add_message(user_id, 'user', user_message)
+            _t_ctx_start = time.perf_counter()
             conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
+            _t_ctx_ms = (time.perf_counter() - _t_ctx_start) * 1000
+            ilog("DB", f"Contexto recuperado: {len(conversation_context)} msgs em {_t_ctx_ms:.2f}ms")
             system_prompt = _build_system_prompt(user)
 
         # --- Create SSE session ---
@@ -1112,19 +1147,35 @@ Seja direto, objetivo e conciso."""
                 import queue as _queue
                 tts_sentence_queue = _queue.Queue()
 
+                def _wav_duration(path):
+                    import wave
+                    try:
+                        with wave.open(path) as wf:
+                            return wf.getnframes() / wf.getframerate()
+                    except Exception:
+                        return 0.0
+
+                _tts_sentence_counter = [0]
+
                 def tts_worker():
                     while True:
                         sentence = tts_sentence_queue.get()
                         if sentence is None:  # sentinel — stop worker
                             break
                         try:
-                            print(f"🎙️ [SSE] Synthesizing: {sentence[:60]}...")
+                            _tts_sentence_counter[0] += 1
+                            _idx = _tts_sentence_counter[0]
+                            _t0 = time.perf_counter()
                             audio_file = tts.synthesize_to_temp(
                                 sentence,
                                 personality_id=_tts_personality,
                                 language=_tts_language,
                                 gender=_tts_gender,
                             )
+                            synth_time = time.perf_counter() - _t0
+                            audio_dur = _wav_duration(audio_file) if audio_file else 0.0
+                            rtf = synth_time / audio_dur if audio_dur > 0 else 0.0
+                            ilog("TTS", f"Frase {_idx}: {synth_time:.2f}s | RTF={rtf:.3f} | \"{sentence[:50]}\"")
                             if audio_file and audio_player and audio_player.is_available():
                                 audio_player.enqueue_audio(audio_file, {
                                     'text': sentence,
@@ -1150,6 +1201,11 @@ Seja direto, objetivo e conciso."""
                 _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
 
                 # Stream from Ollama — no longer blocked by TTS synthesis
+                user_name = _user['name'] if _user else 'Visitante'
+                ilog("LLM", f"Geração iniciada (model={_ollama_model}, user={user_name})")
+                _llm_t0 = time.perf_counter()
+                _llm_ttft = None
+
                 for chunk in ollama_client.generate_streaming_response(
                     prompt=_prompted_message,
                     system_prompt=_system_prompt,
@@ -1158,6 +1214,10 @@ Seja direto, objetivo e conciso."""
                 ):
                     if not chunk:
                         continue
+
+                    if _llm_ttft is None:
+                        _llm_ttft = time.perf_counter() - _llm_t0
+                        ilog("LLM", f"Primeiro token: {_llm_ttft:.2f}s")
 
                     full_response += chunk
 
@@ -1168,6 +1228,9 @@ Seja direto, objetivo e conciso."""
                     sentences = sentence_detector.add_chunk(chunk)
                     for sentence in sentences:
                         tts_sentence_queue.put(sentence)
+
+                _llm_total = time.perf_counter() - _llm_t0
+                ilog("LLM", f"Concluído: {_llm_total:.2f}s | {len(full_response)} chars")
 
                 # Flush remaining text into TTS worker
                 final_sentence = sentence_detector.flush()
@@ -1276,7 +1339,10 @@ Seja direto, objetivo e conciso."""
             user_id = user['id']
             history_manager = ConversationHistory(db)
             history_manager.add_message(user_id, 'user', user_message)
+            _t_ctx_start = time.perf_counter()
             conversation_context = history_manager.get_context_for_llm(user_id, max_messages=8)
+            _t_ctx_ms = (time.perf_counter() - _t_ctx_start) * 1000
+            ilog("DB", f"Contexto recuperado: {len(conversation_context)} msgs em {_t_ctx_ms:.2f}ms")
             system_prompt = _build_system_prompt(user)
 
         user_name = user['name'] if user else 'Visitante'
@@ -1549,6 +1615,7 @@ def api_voice_record_and_transcribe():
             tlog("oww_pause_start")
             wake_word_manager.pause()
             tlog("oww_pause_end")
+        ilog("STT", f"Gravação iniciada (lang={whisper_lang}, max={max_duration}s)")
         try:
             print(f"🎤 [API] Recording with VAD (max {max_duration}s)...")
             tlog("record_utterance_start")
@@ -1574,6 +1641,7 @@ def api_voice_record_and_transcribe():
         # Transcreve com Whisper
         print(f"🔄 [API] Transcrevendo com Whisper...")
         tlog("whisper_transcribe_start")
+        _stt_t0 = time.perf_counter()
 
         text = whisper_stt._transcribe_audio_file(temp_path)
         tlog("whisper_transcribe_end")
@@ -1587,6 +1655,8 @@ def api_voice_record_and_transcribe():
         import re
         cleaned = re.sub(r'\[.*?\]', '', text or '').strip()
         if cleaned:
+            _stt_elapsed = time.perf_counter() - _stt_t0
+            ilog("STT", f"Transcrição concluída em {_stt_elapsed:.2f}s → \"{cleaned}\"")
             print(f"✅ [API] Transcrito: '{cleaned}'")
             tlog("return_success")
             return jsonify({

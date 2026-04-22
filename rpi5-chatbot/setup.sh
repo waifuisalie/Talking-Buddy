@@ -24,7 +24,7 @@ echo ""
 
 # Phase tracking
 CURRENT_PHASE=""
-TOTAL_PHASES=10
+TOTAL_PHASES=8
 
 # Error handling function
 handle_error() {
@@ -121,7 +121,7 @@ echo ""
 # ============================================================================
 # PHASE 1: SYSTEM DEPENDENCIES
 # ============================================================================
-CURRENT_PHASE="Phase 1/10: Installing system dependencies"
+CURRENT_PHASE="Phase 1/8: Installing system dependencies"
 echo "📦 $CURRENT_PHASE..."
 
 # Check internet connection
@@ -185,7 +185,7 @@ echo "✅ System dependencies installed successfully"
 # ============================================================================
 # PHASE 2: WHISPER.CPP
 # ============================================================================
-CURRENT_PHASE="Phase 2/10: Installing whisper.cpp"
+CURRENT_PHASE="Phase 2/8: Installing whisper.cpp"
 echo ""
 echo "🎤 $CURRENT_PHASE..."
 
@@ -281,106 +281,9 @@ else
 fi
 
 # ============================================================================
-# PHASE 3: PIPER TTS
+# PHASE 3: OLLAMA INSTALLATION
 # ============================================================================
-CURRENT_PHASE="Phase 3/10: Installing Piper TTS"
-echo ""
-echo "🔊 $CURRENT_PHASE..."
-
-cd ~
-
-# Install Piper binary
-if [ ! -d "piper" ]; then
-    echo "🔄 Downloading Piper TTS (~20MB)..."
-
-    if ! wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz; then
-        show_error "Failed to download Piper TTS" \
-                   "Check network connection"
-        echo ""
-        echo "Troubleshooting:"
-        echo "  - Check network: ping github.com"
-        echo "  - Check URL is still valid at: https://github.com/rhasspy/piper/releases"
-        exit 1
-    fi
-
-    # Verify download integrity
-    if ! check_file_size "piper_linux_aarch64.tar.gz" 1000000; then
-        show_error "Downloaded Piper archive is too small" \
-                   "Download may have been incomplete"
-        rm -f piper_linux_aarch64.tar.gz
-        exit 1
-    fi
-
-    echo "🔄 Extracting Piper..."
-    mkdir -p ~/piper
-    if ! tar -xzf piper_linux_aarch64.tar.gz -C ~/piper; then
-        show_error "Failed to extract Piper archive" \
-                   "Archive may be corrupted"
-        echo ""
-        echo "Troubleshooting:"
-        echo "  - Remove corrupted file: rm piper_linux_aarch64.tar.gz"
-        echo "  - Re-run setup script"
-        exit 1
-    fi
-
-    rm piper_linux_aarch64.tar.gz
-
-    # Verify binary exists and is executable
-    if ! check_file ~/piper/piper/piper; then
-        show_error "Piper binary not found after extraction" \
-                   "Archive structure may have changed"
-        exit 1
-    fi
-
-    chmod +x ~/piper/piper/piper
-    echo "✅ Piper TTS installed successfully"
-else
-    echo "⏭️  Piper already exists, skipping installation"
-fi
-
-# Download Portuguese TTS model
-cd ~/piper/piper
-if [ ! -f "pt_BR-faber-medium.onnx" ]; then
-    echo "🔄 Downloading Brazilian Portuguese TTS model (~60MB)..."
-
-    if ! wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx; then
-        show_error "Failed to download PT-BR voice model" \
-                   "Check network connection"
-        echo ""
-        echo "Troubleshooting:"
-        echo "  - Check network: ping huggingface.co"
-        echo "  - Try manual download from: https://huggingface.co/rhasspy/piper-voices"
-        exit 1
-    fi
-
-    if ! wget https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json; then
-        show_error "Failed to download PT-BR voice config" \
-                   "Check network connection"
-        exit 1
-    fi
-
-    # Verify model files
-    if ! check_file_size "pt_BR-faber-medium.onnx" 50000000; then
-        show_error "PT-BR model file is too small" \
-                   "Download may have been incomplete"
-        rm -f pt_BR-faber-medium.onnx*
-        exit 1
-    fi
-
-    if ! check_file "pt_BR-faber-medium.onnx.json"; then
-        show_error "PT-BR model config file missing"
-        exit 1
-    fi
-
-    echo "✅ PT-BR TTS model downloaded successfully"
-else
-    echo "⏭️  PT-BR TTS model already exists, skipping download"
-fi
-
-# ============================================================================
-# PHASE 4: OLLAMA INSTALLATION
-# ============================================================================
-CURRENT_PHASE="Phase 4/10: Installing Ollama"
+CURRENT_PHASE="Phase 3/8: Installing Ollama"
 echo ""
 echo "🧠 $CURRENT_PHASE..."
 
@@ -466,9 +369,9 @@ for i in {1..30}; do
 done
 
 # ============================================================================
-# PHASE 5: OLLAMA MODELS
+# PHASE 4: OLLAMA MODELS
 # ============================================================================
-CURRENT_PHASE="Phase 5/10: Downloading Ollama models"
+CURRENT_PHASE="Phase 4/8: Downloading Ollama models"
 echo ""
 echo "📥 $CURRENT_PHASE..."
 
@@ -519,9 +422,9 @@ if ! ollama list | grep -q "gemma3:1b"; then
 fi
 
 # ============================================================================
-# PHASE 6: PYTHON ENVIRONMENT SETUP
+# PHASE 5: PYTHON ENVIRONMENT SETUP
 # ============================================================================
-CURRENT_PHASE="Phase 6/10: Setting up Python environment"
+CURRENT_PHASE="Phase 5/8: Setting up Python environment"
 echo ""
 echo "🐍 $CURRENT_PHASE..."
 
@@ -644,7 +547,7 @@ else
     echo "⚠️  openWakeWord import failed — check pip install output above"
 fi
 
-# Install Supertonic 2 TTS (multilingual, 9x faster than Piper)
+# Install Supertonic 2 TTS (multilingual)
 echo "🔄 Checking Supertonic 2 TTS..."
 
 # Check if both package AND model are installed
@@ -665,8 +568,7 @@ else
         if python -c "import supertonic; tts = supertonic.TTS(); print('Model loaded successfully')" 2>&1; then
             echo "✅ Supertonic 2 TTS installed successfully (with model)"
         else
-            echo "⚠️  Model download failed (non-fatal)"
-            echo "   Piper TTS will be used as fallback"
+            echo "❌ Model download failed — TTS will not work without this"
             echo ""
             echo "   Troubleshooting:"
             echo "   - Check internet: ping huggingface.co"
@@ -675,8 +577,7 @@ else
             echo "   - Check HuggingFace Hub access"
         fi
     else
-        echo "⚠️  Supertonic 2 installation failed (non-fatal)"
-        echo "   Piper TTS will be used as fallback"
+        echo "❌ Supertonic 2 installation failed — TTS will not work"
         echo ""
         echo "   Troubleshooting:"
         echo "   - Check network connection"
@@ -746,9 +647,9 @@ fi
 echo "✅ All critical packages verified"
 
 # ============================================================================
-# PHASE 7: PERSONALITY MODEL CREATION
+# PHASE 6: PERSONALITY MODEL CREATION
 # ============================================================================
-CURRENT_PHASE="Phase 7/10: Creating personality models"
+CURRENT_PHASE="Phase 6/8: Creating personality models"
 echo ""
 echo "🎯 $CURRENT_PHASE..."
 
@@ -838,9 +739,9 @@ fi
 echo "✅ Verified $PERSONALITY_COUNT personality model(s)"
 
 # ============================================================================
-# PHASE 8: SYSTEM-INTERFACE SETUP
+# PHASE 7: SYSTEM-INTERFACE SETUP
 # ============================================================================
-CURRENT_PHASE="Phase 8/10: Setting up system-interface"
+CURRENT_PHASE="Phase 7/8: Setting up system-interface"
 echo ""
 echo "🌐 $CURRENT_PHASE..."
 
@@ -867,13 +768,7 @@ if [ ! -f ".env" ]; then
     if check_file ".env.example"; then
         echo "🔄 Creating .env from .env.example..."
         cp .env.example .env
-
-        # Update paths in .env
-        echo "🔄 Configuring .env with correct paths..."
-        sed -i "s|~/piper/piper/piper|$HOME/piper/piper/piper|g" .env
-        sed -i "s|~/piper/piper/|$HOME/piper/piper/|g" .env
-
-        echo "✅ .env file created and configured"
+        echo "✅ .env file created"
     else
         show_error ".env.example not found in system-interface" \
                    "Cannot create configuration file"
@@ -970,9 +865,9 @@ cd "$SCRIPT_DIR"
 source venv/bin/activate
 
 # ============================================================================
-# PHASE 9: HARDWARE CONFIGURATION (RFID, Audio, Permissions)
+# PHASE 8: HARDWARE CONFIGURATION (RFID, Audio, Permissions)
 # ============================================================================
-CURRENT_PHASE="Phase 9/10: Configuring hardware (RFID/SPI, Audio, Permissions)"
+CURRENT_PHASE="Phase 8/8: Configuring hardware (RFID/SPI, Audio, Permissions)"
 echo ""
 echo "🔧 $CURRENT_PHASE..."
 
@@ -1122,45 +1017,7 @@ echo "  If this is first setup, please REBOOT after installation:"
 echo "  sudo reboot"
 echo ""
 
-# ============================================================================
-# PHASE 10: VERIFY INSTALLATION
-# ============================================================================
-CURRENT_PHASE="Phase 10/10: Verifying installation"
-echo ""
-echo "✅ $CURRENT_PHASE..."
-
 cd "$SCRIPT_DIR"
-
-# Pre-test validation
-if ! check_directory "venv"; then
-    show_error "Virtual environment not found" \
-               "Python environment setup may have failed"
-    exit 1
-fi
-
-if ! check_file "src/run_chatbot.py"; then
-    show_error "run_chatbot.py not found" \
-               "Source files may be missing"
-    exit 1
-fi
-
-# Ensure venv is activated
-if [ -z "$VIRTUAL_ENV" ]; then
-    echo "🔄 Reactivating virtual environment..."
-    source venv/bin/activate
-fi
-
-# Run system tests
-echo "🔄 Running system tests..."
-if python src/run_chatbot.py --test; then
-    echo "✅ All system tests passed"
-else
-    echo ""
-    echo "⚠️  System tests failed (non-fatal)"
-    echo "   You can still run the chatbot, but some features may not work"
-    echo "   Review the test output above for details"
-    echo ""
-fi
 
 # ============================================================================
 # INSTALLATION SUMMARY
@@ -1182,20 +1039,16 @@ echo "✅ System dependencies (build tools, audio libraries)"
 echo "✅ whisper.cpp (speech-to-text)"
 echo "   └─ Model: ggml-base.bin (multilingual)"
 echo "   └─ Location: ~/whisper.cpp"
-echo "✅ Piper TTS (text-to-speech - Portuguese)"
-echo "   └─ Model: pt_BR-faber-medium"
-echo "   └─ Location: ~/piper/piper"
-echo "✅ Supertonic 2 TTS (text-to-speech - multilingual, 9x faster)"
+echo "✅ Supertonic 2 TTS (text-to-speech - multilingual)"
 echo "   └─ Languages: Portuguese, English, Spanish"
 echo "   └─ Voices: 8 unique voices (F1-F5, M1-M3)"
 echo "✅ Ollama (LLM service)"
 echo "   └─ Service: Active"
 echo "   └─ Base model: gemma3:1b"
 echo "   └─ Personalities: $PERSONALITY_COUNT models created"
-echo "✅ Python environment (rpi5-chatbot)"
+echo "✅ Python environment (rpi5-chatbot venv — install-time only)"
 echo "   └─ Location: ./venv"
-echo "   └─ Packages: pygame, requests, numpy, pyaudio, pyserial, psutil, supertonic"
-echo "✅ System-interface (Web UI)"
+echo "✅ System-interface (Web UI — runtime app)"
 echo "   └─ Location: ../system-interface"
 echo "   └─ Database: Initialized"
 echo "   └─ Voice integration: Configured"
@@ -1205,38 +1058,18 @@ echo "   └─ User groups: spi, gpio, dialout, audio"
 echo ""
 echo "Next Steps:"
 echo ""
-echo "1. Start the Web UI (recommended):"
+echo "1. Start the Web UI:"
 echo "   cd ../system-interface"
 echo "   bash start.sh"
 echo "   Then open browser: http://localhost:5000"
 echo ""
-echo "2. Test with different personalities (keyboard mode):"
-echo "   cd rpi5-chatbot"
-echo "   source venv/bin/activate"
-echo "   python src/run_chatbot.py --wake-mode keyboard --personality casual"
-echo "   python src/run_chatbot.py --wake-mode keyboard --personality humorous --language en"
-echo ""
-echo "3. Test with Supertonic TTS (9x faster, multilingual):"
-echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language pt"
-echo "   python src/run_chatbot.py --wake-mode keyboard --tts-engine supertonic --language en --personality formal"
-echo ""
-echo "4. For production with ESP32 wake word:"
-echo "   python src/run_chatbot.py --wake-mode serial --personality casual --tts-engine supertonic"
-echo ""
-echo "5. View available personalities:"
-echo "   python src/run_chatbot.py --list-personalities"
-echo ""
-echo "6. View all available commands:"
-echo "   python src/run_chatbot.py --help"
+echo "2. Personality, language, and voice are selected via the web UI."
 echo ""
 echo "Troubleshooting:"
 echo "  - Setup log: $LOG_FILE"
-echo "  - Test system: python src/run_chatbot.py --test"
-echo "  - Test voice: cd ../system-interface && python test_voice_system.py"
 echo "  - Check Ollama: systemctl status ollama"
 echo "  - Check models: ollama list"
-echo "  - List personalities: python src/run_chatbot.py --list-personalities"
-echo "  - List audio devices: python src/run_chatbot.py --list-devices"
+echo "  - List audio devices: cd ../system-interface && python test_audio_devices.py"
 echo "  - Web interface logs: Check terminal output when running start.sh"
 echo ""
 echo "Documentation: README.md"
