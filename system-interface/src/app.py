@@ -688,19 +688,33 @@ def rfid_start():
             print(f"[RFID Start] ❌ ERRO: {error_msg}")
             return jsonify({'success': False, 'error': error_msg})
         
-        # Inicia novo processo COM SUDO (essencial para acesso GPIO)
+        # Inicia novo processo COM SUDO (essencial para acesso SPI/GPIO)
+        # Usa o mesmo Python do venv (garante spidev disponível) e captura
+        # stderr para que erros apareçam no log de sessão via tee.
         env = os.environ.copy()
-        
+        venv_python = sys.executable  # python do venv ativo
+
         print(f"[RFID Start] 🚀 Iniciando novo processo: {script_path}")
+        print(f"[RFID Start] 🐍 Python: {venv_python}")
         rfid_process = subprocess.Popen(
-            ['sudo', '/usr/bin/python3', script_path],
-            stdout=None,  # ← Mostra logs em tempo real
-            stderr=None,  # ← Mostra erros em tempo real
+            ['sudo', venv_python, '-u', script_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             cwd=os.path.dirname(__file__),
             env=env
         )
+
+        # Thread que encaminha saída do subprocess para o log de sessão
+        def _forward_rfid_output(proc):
+            for raw in proc.stdout:
+                line = raw.decode('utf-8', errors='replace').rstrip()
+                if line:
+                    print(f"[RFID] {line}", flush=True)
+        threading.Thread(target=_forward_rfid_output, args=(rfid_process,),
+                         daemon=True, name="RFIDOutputForwarder").start()
+
         print(f"[RFID Start] ✅ Processo iniciado com PID: {rfid_process.pid}")
-        
+
         # Verificar se o processo iniciou corretamente
         time.sleep(1)  # Dar mais tempo para inicializar
         if rfid_process.poll() is not None:

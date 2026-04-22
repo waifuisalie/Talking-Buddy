@@ -53,3 +53,7 @@ logs/
 *.backup
 *.bak
 *.old
+
+# Orphan artifacts
+test_*.html
+image*.png

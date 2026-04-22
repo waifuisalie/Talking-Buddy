@@ -308,10 +308,13 @@ class Database:
         cur = self.conn.cursor()
         cur.execute(
             "SELECT id, role, content, metadata, created_at "
-            "FROM conversation_history "
-            "WHERE user_id=? "
-            "ORDER BY created_at ASC "
-            "LIMIT ?",
+            "FROM ("
+            "  SELECT id, role, content, metadata, created_at "
+            "  FROM conversation_history "
+            "  WHERE user_id=? "
+            "  ORDER BY created_at DESC "
+            "  LIMIT ?"
+            ") ORDER BY created_at ASC",
             (user_id, limit)
         )
         return cur.fetchall()

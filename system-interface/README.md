@@ -1,162 +1,84 @@
-# Sistema de Cadastro RFID + Assistente de Voz com Wake Word
+# system-interface — Runtime app
 
-Sistema web **100% OFFLINE** para gerenciamento de usuários com leitor RFID, assistente de voz com IA e detecção de wake word via ESP32.
+Flask web app with RFID login, local wake word detection, Whisper STT, Ollama LLM, and Supertonic TTS. Runs entirely on the Raspberry Pi 5 — no internet required.
 
-**Funciona sem internet** - Todos os arquivos são locais (sem CDNs ou APIs externas).
+## Running
 
-## 🚀 Início Rápido
+First install on a fresh Pi (see `../rpi5-chatbot/setup.sh`). Then:
 
-### Primeira vez (Instalação):
-```bash
-cd rpi5-chatbot
-bash setup.sh
-```
-
-### Iniciar o sistema (sempre):
 ```bash
 cd system-interface
 bash start.sh
 ```
 
-Depois abra o navegador: **http://localhost:5000**
+Open **http://localhost:5000** in the browser.
 
-## ✨ Funcionalidades
+`start.sh` starts Ollama, warms the default model, calibrates the VAD, and launches Flask on port 5000.
 
-- ✅ **RFID**: Identificação automática de usuários
-- ✅ **Wake Word**: Diga "Marvin" para ativar o assistente (ESP32)
-- ✅ **Voz**: Reconhecimento (Whisper) + Resposta (Ollama) + Síntese (Piper TTS)
-- ✅ **Chat**: Interface animada com robô
-- ✅ **100% Offline**: Sem internet necessária
-- ✅ **Auto-detecção**: Sistema encontra ESP32 em qualquer porta USB
+## Features
 
-## 🎤 Wake Word Detection
+- **RFID login** — MFRC522 reader identifies users and loads per-user history
+- **Local wake word** — openWakeWord (`hey_buddy`) runs on the Pi's USB microphone
+- **Voice pipeline** — Whisper STT → Ollama LLM → Supertonic TTS, with SSE streaming to the UI
+- **Web UI** — chat, admin, and user management served locally
+- **Battery aware** — UPS HAT fuel gauge exposes remaining charge
+- **100% offline** — all assets local, no CDNs or external APIs
 
-O sistema suporta **dois modos** de detecção de wake word:
+## Wake word
 
-### Modo 1: Local (Vosk) - Recomendado ✅
+openWakeWord runs in-process on the USB mic. Models live in `../rpi5-chatbot/models/openwakeword/` (`hey_buddy.onnx` + embedding + melspectrogram), loaded by `src/openwakeword_manager.py`.
 
-Detecção 100% no Raspberry Pi usando o microfone USB.
-
-**Vantagens:**
-- ✅ Melhor qualidade (microfone USB > microfone I2S do ESP32)
-- ✅ Apenas 1 microfone necessário
-- ✅ Mais simples (sem hardware adicional)
-- ✅ 100% offline (sem API keys)
-- ✅ Palavra customizável facilmente
-
-**Configuração (.env):**
-```bash
-WAKE_WORD_MODE=local
-WAKE_WORD_KEYWORD=marvin
-VOSK_MODEL_PATH=~/vosk-models/vosk-model-small-pt-0.3
-```
-
-**Instalação:**
-```bash
-# 1. Instalar Vosk (já instalado no venv)
-pip3 install vosk
-
-# 2. Baixar modelo português (~31MB)
-cd ~
-mkdir -p vosk-models && cd vosk-models
-wget https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip
-unzip vosk-model-small-pt-0.3.zip
-rm vosk-model-small-pt-0.3.zip
-```
-
-### Modo 2: ESP32 (Hardware Externo)
-
-Detecção via ESP32-S3 com TensorFlow Lite.
-
-**Vantagens:**
-- ✅ Não usa CPU do Raspberry
-- ✅ Latência muito baixa (~100ms)
-
-**Desvantagens:**
-- ❌ Microfone I2S de qualidade inferior
-- ❌ Hardware adicional necessário
-- ❌ 2 microfones no sistema
-
-**Configuração (.env):**
-```bash
-WAKE_WORD_MODE=esp32
-ESP32_BAUD_RATE=115200
-ESP32_RECONNECT_INTERVAL=5
-```
-
-**Requisitos:**
-- ESP32-S3 com firmware de wake word
-- Usuário no grupo `dialout`:
-  ```bash
-  sudo usermod -a -G dialout $USER
-  # Fazer logout/login após
-  ```
-
-### Como funciona:
-
-1. **Detecção**: Sistema detecta palavra "marvin" (ou configurada)
-2. **Ação automática**:
-   - Tela do robô: Abre chat + toca som + ativa microfone
-   - Tela do chat: Toca som + ativa microfone
-3. **Gravação**: VAD grava até silêncio
-4. **Processamento**: Whisper → Ollama → Piper
-
-### Testar:
+Configure via `.env`:
 
 ```bash
-# Testar detector local
-cd system-interface
-source venv/bin/activate
-python3 src/local_wake_word.py
-# Diga "marvin" próximo ao microfone
-
-# Testar integração completa
-bash start.sh
-# Sistema deve mostrar: "✅ Local Wake Word Manager ativado"
+WAKE_WORD_ENABLED=true
+WAKE_WORD_DEBOUNCE_TIME=2.0
 ```
 
-### Desabilitar Wake Word:
+Flow: wake word detected → chat opens, feedback sound plays, mic arms → VAD records until silence → Whisper transcribes → Ollama generates → Supertonic speaks.
 
-```bash
-# No .env
-WAKE_WORD_MODE=disabled
-```
-
-## 🚀 Início Rápido
-
-```bash
-pip3 install flask
-python3 src/init_system.py
-```
-
-## Uso
-
-```bash
-python3 src/app.py
-```
-
-Acesse: **http://localhost:5000**
-
-## Estrutura
+## Layout
 
 ```
+system-interface/
 ├── src/
-│   ├── app.py           # Servidor Flask (localhost)
-│   ├── database.py      # SQLite local
-│   └── init_system.py   # Inicializador
-├── templates/           # HTML local
-├── static/              # CSS e JS local
-└── assistant.db         # Banco SQLite (criado automaticamente)
+│   ├── app.py                  # Flask entry point
+│   ├── database.py             # SQLite users + conversation history
+│   ├── openwakeword_manager.py # Wake word detection
+│   ├── rfid_manager.py         # MFRC522 RFID reader
+│   ├── battery_monitor.py      # UPS HAT fuel gauge
+│   ├── telemetry.py            # Structured logging
+│   └── sse_manager.py          # Server-sent events for UI updates
+├── voice_assistant/            # Ollama, Supertonic, streaming, personalities
+├── templates/  static/         # Web UI
+├── data/                       # SQLite DBs
+├── start.sh                    # Launcher
+└── .env.example                # Configuration template
 ```
 
-## Características
+## Configuration (`.env`)
 
-- ✅ 100% Offline (sem internet)
-- ✅ Banco de dados SQLite local
-- ✅ Todos os arquivos locais (CSS, JS, HTML)
-- ✅ Servidor apenas em localhost (127.0.0.1)
-- ✅ Teclado virtual integrado
+Copy `.env.example` to `.env` and adjust:
 
-## Campos
+- `OLLAMA_MODEL`, `OLLAMA_URL` — LLM endpoint
+- `AUDIO_DEVICE`, `MICROPHONE_DEVICE` — ALSA names (run `test_audio_devices.py` to list)
+- `WHISPER_*` — whisper.cpp paths (defaults from setup.sh)
+- `SUPERTONIC_LANGUAGE`, `SUPERTONIC_PERSONALITY` — TTS voice
+- `WAKE_WORD_ENABLED`, `WAKE_WORD_DEBOUNCE_TIME` — wake word behavior
 
-- Nome, CPF (11 dígitos), Email, Telefone, RFID
+## API quick reference
+
+```bash
+curl http://localhost:5000/api/voice/status
+curl -X POST http://localhost:5000/api/chat/send \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Olá!", "rfid": "TEST001", "user_id": 1}'
+curl http://localhost:5000/api/chat/history/TEST001
+```
+
+## Troubleshooting
+
+- **Ollama not reachable**: `systemctl --user status ollama`; ensure `OLLAMA_URL` matches.
+- **No audio devices**: `python test_audio_devices.py` to list ALSA inputs/outputs.
+- **Wake word not triggering**: check `src/openwakeword_manager.py` logs on boot; confirm the mic named in `MICROPHONE_DEVICE` is the one receiving your voice.
+- **RFID not reading**: confirm SPI enabled (`ls /dev/spidev*`) and user in `spi`/`gpio` groups.

@@ -42,6 +42,10 @@ except:
 
 print("🔧 Inicializando leitor RFID...", flush=True)
 reader = MFRC522.MFRC522()
+version = reader.Read_MFRC522(0x37)  # VersionReg
+print(f"🔍 MFRC522 VersionReg = 0x{version:02X} (esperado 0x91 ou 0x92)", flush=True)
+if version in (0x00, 0xFF):
+    print("❌ SPI não está comunicando com o chip — verificar fiação, alimentação e pino RST", flush=True)
 print("✅ Pronto - Aguardando cartões (modo contínuo 24/7)", flush=True)
 
 last_uid = None
