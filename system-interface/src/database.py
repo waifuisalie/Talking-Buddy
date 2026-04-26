@@ -12,6 +12,15 @@ import secrets
 import sqlite3
 from typing import Optional, List
 
+try:
+    import sqlite_vec  # type: ignore
+    _SQLITE_VEC_IMPORT_OK = True
+    _SQLITE_VEC_IMPORT_ERR: Optional[str] = None
+except Exception as _e:
+    sqlite_vec = None  # type: ignore
+    _SQLITE_VEC_IMPORT_OK = False
+    _SQLITE_VEC_IMPORT_ERR = str(_e)
+
 # Configurações de segurança
 PBKDF2_ITERS = 200_000
 PBKDF2_HASH = "sha256"
@@ -28,8 +37,13 @@ RESPONSE_STYLES = [
 GENDERS = ["male", "female"]
 LANGUAGES = ["pt-BR", "en-US", "es-ES"]
 
-# Schema do banco de dados
-SCHEMA_SQL = """
+EMBEDDING_MODEL_DEFAULT = "granite-embedding:278m"
+EMBEDDING_DIM = 768
+
+# Tabelas base: existem independentemente da extensão sqlite-vec.
+# Inclui RAG metadata (rag_corpora / rag_documents / rag_chunks_text) — apenas
+# o índice vetorial real exige a extensão.
+SCHEMA_SQL_BASE = """
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -69,11 +83,91 @@ CREATE TABLE IF NOT EXISTS conversation_history (
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS rag_corpora (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  language TEXT,
+  embedding_model TEXT NOT NULL,
+  document_count INTEGER NOT NULL DEFAULT 0,
+  chunk_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS rag_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  corpus_id INTEGER NOT NULL,
+  filename TEXT NOT NULL,
+  filepath TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  page_count INTEGER,
+  chunk_count INTEGER,
+  ingested_at TEXT NOT NULL,
+  FOREIGN KEY(corpus_id) REFERENCES rag_corpora(id) ON DELETE CASCADE,
+  UNIQUE(corpus_id, sha256)
+);
+
+CREATE TABLE IF NOT EXISTS rag_chunks_text (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  corpus_id INTEGER NOT NULL,
+  document_id INTEGER NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  page_start INTEGER,
+  page_end INTEGER,
+  FOREIGN KEY(document_id) REFERENCES rag_documents(id) ON DELETE CASCADE,
+  FOREIGN KEY(corpus_id) REFERENCES rag_corpora(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_user_data_user_id ON user_data(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 CREATE INDEX IF NOT EXISTS idx_users_rfid ON users(rfid);
 CREATE INDEX IF NOT EXISTS idx_conversation_user_id ON conversation_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversation_created_at ON conversation_history(created_at);
+CREATE INDEX IF NOT EXISTS idx_ragdoc_corpus ON rag_documents(corpus_id);
+CREATE INDEX IF NOT EXISTS idx_ragchunks_corpus ON rag_chunks_text(corpus_id);
+CREATE INDEX IF NOT EXISTS idx_ragchunks_doc ON rag_chunks_text(document_id);
+"""
+
+# Memória Ordenada: user_memories + FTS5. Independente da extensão sqlite-vec.
+SCHEMA_SQL_MEMORY = """
+CREATE TABLE IF NOT EXISTS user_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  extracted_value TEXT,
+  occurred_at TEXT,
+  created_at TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'voice',
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_um_user_time ON user_memories(user_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_um_user_type ON user_memories(user_id, event_type);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS user_memories_fts USING fts5(
+  content,
+  content='user_memories',
+  content_rowid='id',
+  tokenize="unicode61 remove_diacritics 2"
+);
+
+CREATE TRIGGER IF NOT EXISTS user_memories_ai AFTER INSERT ON user_memories BEGIN
+  INSERT INTO user_memories_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS user_memories_ad AFTER DELETE ON user_memories BEGIN
+  INSERT INTO user_memories_fts(user_memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+END;
+"""
+
+# Índice vetorial: requer a extensão sqlite-vec. Criado apenas se vec_available.
+SCHEMA_SQL_VEC = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_vec USING vec0(
+  corpus_id INTEGER PARTITION KEY,
+  embedding FLOAT[{EMBEDDING_DIM}]
+);
 """
 
 
@@ -96,12 +190,56 @@ def pbkdf2_hash_password(password: str, salt: bytes) -> bytes:
 
 class Database:
     """Gerenciador de banco de dados SQLite"""
-    
+
     def __init__(self, db_path: str):
         ensure_dir(db_path)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(SCHEMA_SQL)
+
+        # WAL: permite leitor + escritor concorrentes (necessário para a thread
+        # async de extração de memória que escreve em paralelo ao streaming).
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.Error as e:
+            print(f"[DB] PRAGMA journal_mode=WAL falhou (não-fatal): {e}")
+
+        # Tenta carregar a extensão sqlite-vec. Se falhar, RAG vetorial fica off
+        # mas o resto do app continua funcionando.
+        self.vec_available = False
+        self.vec_error: Optional[str] = None
+        if not _SQLITE_VEC_IMPORT_OK:
+            self.vec_error = f"sqlite_vec import failed: {_SQLITE_VEC_IMPORT_ERR}"
+            print(f"[DB] sqlite-vec indisponível ({self.vec_error}) — RAG vetorial desativado")
+        else:
+            try:
+                self.conn.enable_load_extension(True)
+                sqlite_vec.load(self.conn)
+                self.conn.enable_load_extension(False)
+                self.vec_available = True
+            except Exception as e:
+                self.vec_error = str(e)
+                print(f"[DB] sqlite-vec falhou ao carregar ({e}) — RAG vetorial desativado")
+
+        # Cria tabelas base + memória ordenada
+        self.conn.executescript(SCHEMA_SQL_BASE)
+        self.conn.executescript(SCHEMA_SQL_MEMORY)
+
+        # Índice vetorial só se a extensão estiver disponível
+        if self.vec_available:
+            try:
+                self.conn.executescript(SCHEMA_SQL_VEC)
+            except Exception as e:
+                self.vec_available = False
+                self.vec_error = f"vec0 schema falhou: {e}"
+                print(f"[DB] {self.vec_error} — RAG vetorial desativado")
+
+        # Migração idempotente: adiciona users.specialization_id se ausente
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(users)")}
+        if "specialization_id" not in cols:
+            self.conn.execute(
+                "ALTER TABLE users ADD COLUMN specialization_id INTEGER REFERENCES rag_corpora(id)"
+            )
+
         self.conn.commit()
 
     def close(self):
@@ -156,7 +294,7 @@ class Database:
         """Lista todos os usuários ordenados por nome"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users ORDER BY name COLLATE NOCASE"
         )
         return cur.fetchall()
@@ -165,17 +303,17 @@ class Database:
         """Busca um usuário por ID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users WHERE id=?",
             (user_id,),
         )
         return cur.fetchone()
-    
+
     def get_user_by_rfid(self, rfid: str) -> Optional[sqlite3.Row]:
         """Busca um usuário por RFID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
             "FROM users WHERE rfid=?",
             (rfid,),
         )
@@ -199,38 +337,31 @@ class Database:
             cur.execute("SELECT 1 FROM users WHERE rfid=? LIMIT 1", (rfid,))
         return cur.fetchone() is not None
     
-    def get_user_by_rfid(self, rfid: str) -> Optional[sqlite3.Row]:
-        """Busca um usuário pelo RFID"""
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, created_at "
-            "FROM users WHERE rfid=?",
-            (rfid,),
-        )
-        return cur.fetchone()
-
-    def add_user(self, name: str, rfid: str, response_style: str, 
-                 persona_gender: str, language: str) -> int:
+    def add_user(self, name: str, rfid: str, response_style: str,
+                 persona_gender: str, language: str,
+                 specialization_id: Optional[int] = None) -> int:
         """
         Adiciona um novo usuário
         Retorna o ID do usuário criado
         """
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT INTO users(name, rfid, response_style, persona_gender, language, created_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (name, rfid, response_style, persona_gender, language, now_iso()),
+            "INSERT INTO users(name, rfid, response_style, persona_gender, language, specialization_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (name, rfid, response_style, persona_gender, language, specialization_id, now_iso()),
         )
         self.conn.commit()
         return cur.lastrowid
 
-    def update_user(self, user_id: int, name: str, rfid: str, 
-                    response_style: str, persona_gender: str, language: str) -> None:
+    def update_user(self, user_id: int, name: str, rfid: str,
+                    response_style: str, persona_gender: str, language: str,
+                    specialization_id: Optional[int] = None) -> None:
         """Atualiza dados de um usuário existente"""
         cur = self.conn.cursor()
         cur.execute(
-            "UPDATE users SET name=?, rfid=?, response_style=?, persona_gender=?, language=? WHERE id=?",
-            (name, rfid, response_style, persona_gender, language, user_id),
+            "UPDATE users SET name=?, rfid=?, response_style=?, persona_gender=?, language=?, specialization_id=? "
+            "WHERE id=?",
+            (name, rfid, response_style, persona_gender, language, specialization_id, user_id),
         )
         self.conn.commit()
 
