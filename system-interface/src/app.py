@@ -652,7 +652,9 @@ def menu_usuarios():
 def lista_usuarios():
     """Lista todos os usuários"""
     usuarios = get_db().list_users()
-    return render_template('lista_usuarios.html', users=usuarios)
+    corpora = get_db().list_corpora(only_enabled=False)
+    spec_names = {c['id']: c['display_name'] for c in corpora}
+    return render_template('lista_usuarios.html', users=usuarios, spec_names=spec_names)
 
 
 @app.route('/usuarios/aguardar-rfid')
@@ -882,6 +884,45 @@ def selecionar_language():
     return render_template('selecionar_language.html')
 
 
+@app.route('/usuarios/selecionar-especializacao')
+@login_required
+def selecionar_especializacao():
+    """Tela de seleção de especialização (RAG corpus)"""
+    return render_template('selecionar_specialization.html')
+
+
+@app.route('/api/specializations', methods=['GET'])
+@login_required
+def api_specializations():
+    """Lista os corpora habilitados para popular o seletor de especialização."""
+    rows = get_db().list_corpora(only_enabled=True)
+    return jsonify([
+        {
+            'id': r['id'],
+            'slug': r['slug'],
+            'display_name': r['display_name'],
+            'description': r['description'] or '',
+            'language': r['language'] or '',
+            'document_count': r['document_count'],
+            'chunk_count': r['chunk_count'],
+        }
+        for r in rows
+    ])
+
+
+def _parse_specialization_id(raw):
+    """Aceita None, '', 'null', ou string numérica; retorna int ou None."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.lower() in ('null', 'none', '0'):
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
 @app.route('/usuarios/novo', methods=['GET', 'POST'])
 @login_required
 def novo_usuario():
@@ -894,33 +935,36 @@ def novo_usuario():
             response_style = data.get('response_style', '').strip()
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
-            
-            # Validação
+            specialization_id = _parse_specialization_id(data.get('specialization_id'))
+
+            # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
                 return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
-            
+
             # Verifica se nome já existe
             if get_db().user_exists_by_name(name):
                 return jsonify({'success': False, 'message': 'Já existe um usuário com este nome!'})
-            
+
             # Verifica se RFID já existe
             if get_db().user_exists_by_rfid(rfid):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado!'})
-            
+
             # Adiciona usuário
-            get_db().add_user(name, rfid, response_style, persona_gender, language)
+            get_db().add_user(name, rfid, response_style, persona_gender, language, specialization_id)
             return jsonify({'success': True, 'message': 'Usuário cadastrado com sucesso!', 'redirect': '/usuarios/lista'})
-        
+
         except Exception as e:
             error_msg = str(e)
             if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado'})
             return jsonify({'success': False, 'message': f'Erro ao cadastrar: {error_msg}'})
-    
-    return render_template('form_usuario.html', user=None, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+
+    corpora = get_db().list_corpora(only_enabled=True)
+    return render_template('form_usuario.html', user=None,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         corpora=corpora)
 
 
 @app.route('/usuarios/editar/<int:user_id>', methods=['GET', 'POST'])
@@ -930,7 +974,7 @@ def editar_usuario(user_id):
     usuario = get_db().get_user(user_id)
     if not usuario:
         return redirect(url_for('lista_usuarios'))
-    
+
     if request.method == 'POST':
         try:
             data = request.get_json()
@@ -939,33 +983,36 @@ def editar_usuario(user_id):
             response_style = data.get('response_style', '').strip()
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
-            
-            # Validação
+            specialization_id = _parse_specialization_id(data.get('specialization_id'))
+
+            # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
                 return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
-            
+
             # Verifica se nome já existe (excluindo o próprio usuário)
             if get_db().user_exists_by_name(name, exclude_id=user_id):
                 return jsonify({'success': False, 'message': 'Já existe outro usuário com este nome!'})
-            
+
             # Verifica se RFID já existe (excluindo o próprio usuário)
             if get_db().user_exists_by_rfid(rfid, exclude_id=user_id):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário!'})
-            
+
             # Atualiza
-            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language)
+            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language, specialization_id)
             return jsonify({'success': True, 'message': 'Usuário atualizado com sucesso!', 'redirect': '/usuarios/lista'})
-        
+
         except Exception as e:
             error_msg = str(e)
             if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário'})
             return jsonify({'success': False, 'message': f'Erro ao atualizar: {error_msg}'})
-    
-    return render_template('form_usuario.html', user=usuario, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+
+    corpora = get_db().list_corpora(only_enabled=True)
+    return render_template('form_usuario.html', user=usuario,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         corpora=corpora)
 
 
 @app.route('/usuarios/confirmar-remocao/<int:user_id>', methods=['GET'])

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Selecionar Especialização{% endblock %}
+
+{% block content %}
+<div class="box">
+    <div class="box-header">ESPECIALIZACAO DA IA</div>
+    <div class="box-content">
+        <div id="spec-grid" class="btn-grid-2col">
+            <button class="btn btn-selection" onclick="selectOption('', 'NENHUMA')">NENHUMA</button>
+            <!-- Demais opções injetadas dinamicamente via /api/specializations -->
+        </div>
+        <div id="spec-loading" class="form-help" style="margin-top:1rem;">Carregando opções...</div>
+        <div class="btn-stack btn-stack-top-spaced">
+            <button class="btn btn-secondary" onclick="goBackToForm()">CANCELAR</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function selectOption(idValue, displayLabel) {
+    sessionStorage.setItem('specialization_id', idValue);
+    sessionStorage.setItem('specialization_display', displayLabel);
+
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+
+function goBackToForm() {
+    const editingMode = sessionStorage.getItem('editing_mode');
+    const userId = sessionStorage.getItem('editing_user_id');
+
+    if (editingMode === 'true' && userId) {
+        window.location.href = `/usuarios/editar/${userId}`;
+    } else {
+        window.location.href = "{{ url_for('novo_usuario') }}";
+    }
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+    fetch('/api/specializations')
+        .then(r => r.json())
+        .then(corpora => {
+            const grid = document.getElementById('spec-grid');
+            const loading = document.getElementById('spec-loading');
+            loading.style.display = 'none';
+            if (!corpora || corpora.length === 0) {
+                loading.style.display = 'block';
+                loading.textContent = '(Nenhuma especialização cadastrada — use o CLI para ingerir PDFs)';
+                return;
+            }
+            corpora.forEach(c => {
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-selection';
+                btn.textContent = c.display_name.toUpperCase();
+                btn.title = c.description || '';
+                btn.onclick = () => selectOption(String(c.id), c.display_name.toUpperCase());
+                grid.appendChild(btn);
+            });
+        })
+        .catch(err => {
+            const loading = document.getElementById('spec-loading');
+            loading.textContent = 'Erro ao carregar especializações: ' + err;
+        });
+});
+</script>
+{% endblock %}
