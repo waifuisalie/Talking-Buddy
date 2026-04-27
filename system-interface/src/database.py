@@ -478,7 +478,142 @@ class Database:
         else:
             # Remove todas as mensagens
             cur.execute("DELETE FROM conversation_history WHERE user_id=?", (user_id,))
-        
+
         removed = cur.rowcount
         self.conn.commit()
         return removed
+
+    # ========== RAG CORPORA ==========
+
+    def add_corpus(self, slug: str, display_name: str, description: str = "",
+                   language: str = "pt-BR",
+                   embedding_model: str = EMBEDDING_MODEL_DEFAULT) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO rag_corpora(slug, display_name, description, language, "
+            "embedding_model, created_at) VALUES (?,?,?,?,?,?)",
+            (slug, display_name, description, language, embedding_model, now_iso()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_corpus_by_id(self, corpus_id: int) -> Optional[sqlite3.Row]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM rag_corpora WHERE id=?", (corpus_id,))
+        return cur.fetchone()
+
+    def get_corpus_by_slug(self, slug: str) -> Optional[sqlite3.Row]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM rag_corpora WHERE slug=?", (slug,))
+        return cur.fetchone()
+
+    def list_corpora(self, only_enabled: bool = False) -> List[sqlite3.Row]:
+        cur = self.conn.cursor()
+        if only_enabled:
+            cur.execute("SELECT * FROM rag_corpora WHERE enabled=1 ORDER BY display_name")
+        else:
+            cur.execute("SELECT * FROM rag_corpora ORDER BY display_name")
+        return cur.fetchall()
+
+    def delete_corpus(self, corpus_id: int) -> None:
+        """Remove corpus + cascading documents/chunks_text. Vec rows must be deleted explicitly."""
+        if self.vec_available:
+            try:
+                self.conn.execute("DELETE FROM rag_chunks_vec WHERE corpus_id=?", (corpus_id,))
+            except Exception as e:
+                print(f"[DB] delete_corpus vec cleanup falhou: {e}")
+        self.conn.execute("DELETE FROM rag_corpora WHERE id=?", (corpus_id,))
+        self.conn.commit()
+
+    def update_corpus_counts(self, corpus_id: int) -> None:
+        """Recompute and persist document_count + chunk_count for a corpus."""
+        self.conn.execute(
+            "UPDATE rag_corpora SET "
+            "document_count=(SELECT COUNT(*) FROM rag_documents WHERE corpus_id=?), "
+            "chunk_count=(SELECT COUNT(*) FROM rag_chunks_text WHERE corpus_id=?) "
+            "WHERE id=?",
+            (corpus_id, corpus_id, corpus_id),
+        )
+        self.conn.commit()
+
+    # ========== RAG DOCUMENTS ==========
+
+    def add_document(self, corpus_id: int, filename: str, filepath: str,
+                     sha256: str, page_count: int, chunk_count: int = 0) -> int:
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO rag_documents(corpus_id, filename, filepath, sha256, "
+            "page_count, chunk_count, ingested_at) VALUES (?,?,?,?,?,?,?)",
+            (corpus_id, filename, filepath, sha256, page_count, chunk_count, now_iso()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_document(self, document_id: int) -> Optional[sqlite3.Row]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM rag_documents WHERE id=?", (document_id,))
+        return cur.fetchone()
+
+    def get_documents_by_corpus(self, corpus_id: int) -> List[sqlite3.Row]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM rag_documents WHERE corpus_id=? ORDER BY ingested_at DESC",
+            (corpus_id,),
+        )
+        return cur.fetchall()
+
+    def delete_document(self, document_id: int) -> None:
+        """Remove document + cascading chunks_text. Vec rows must be deleted explicitly via rowid."""
+        if self.vec_available:
+            try:
+                cur = self.conn.cursor()
+                cur.execute("SELECT id FROM rag_chunks_text WHERE document_id=?", (document_id,))
+                chunk_ids = [r[0] for r in cur.fetchall()]
+                if chunk_ids:
+                    placeholders = ",".join("?" * len(chunk_ids))
+                    self.conn.execute(
+                        f"DELETE FROM rag_chunks_vec WHERE rowid IN ({placeholders})",
+                        chunk_ids,
+                    )
+            except Exception as e:
+                print(f"[DB] delete_document vec cleanup falhou: {e}")
+        self.conn.execute("DELETE FROM rag_documents WHERE id=?", (document_id,))
+        self.conn.commit()
+
+    # ========== RAG CHUNKS ==========
+
+    def add_chunk(self, corpus_id: int, document_id: int, chunk_index: int,
+                  text: str, embedding: bytes,
+                  page_start: Optional[int] = None,
+                  page_end: Optional[int] = None) -> int:
+        """Insert paired rows in rag_chunks_text and rag_chunks_vec. Vec rowid == text id (1:1)."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO rag_chunks_text(corpus_id, document_id, chunk_index, text, "
+            "page_start, page_end) VALUES (?,?,?,?,?,?)",
+            (corpus_id, document_id, chunk_index, text, page_start, page_end),
+        )
+        chunk_id = cur.lastrowid
+        if self.vec_available:
+            cur.execute(
+                "INSERT INTO rag_chunks_vec(rowid, corpus_id, embedding) VALUES (?,?,?)",
+                (chunk_id, corpus_id, embedding),
+            )
+        self.conn.commit()
+        return chunk_id
+
+    def vector_search(self, corpus_id: int, query_embedding: bytes,
+                      k: int = 3) -> List[sqlite3.Row]:
+        """Return top-k chunks for a query, scoped to corpus_id by partition key."""
+        if not self.vec_available:
+            return []
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT t.id, t.document_id, t.chunk_index, t.text, t.page_start, t.page_end, v.distance "
+            "FROM rag_chunks_vec v "
+            "JOIN rag_chunks_text t ON t.id = v.rowid "
+            "WHERE v.corpus_id = ? AND v.embedding MATCH ? AND k = ? "
+            "ORDER BY v.distance",
+            (corpus_id, query_embedding, k),
+        )
+        return cur.fetchall()
