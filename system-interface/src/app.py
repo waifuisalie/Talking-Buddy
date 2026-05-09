@@ -1247,6 +1247,44 @@ Seja direto, objetivo e conciso."""
                 _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
                 _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
 
+                # Dispatcher: classify intent and augment system prompt
+                _intent = "CHITCHAT"
+                try:
+                    from voice_assistant import dispatcher as _disp
+                    from voice_assistant import rag as _rag_mod
+                    from voice_assistant import memory as _mem_mod
+                    _intent = _disp.classify(_user_message, language=_tts_language)
+                    ilog("DISPATCH", f"Intent: {_intent}")
+
+                    if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
+                        from database import Database as _DBAug
+                        _db_aug = _DBAug(_db_path)
+                        try:
+                            _snippet = _rag_mod.retrieve_context(
+                                _db_aug, _user["specialization_id"], _user_message, k=3
+                            )
+                            if _snippet:
+                                _system_prompt += (
+                                    "\n\n[Contexto relevante da especialização do assistente"
+                                    " — cite quando responder]:\n" + _snippet
+                                )
+                        finally:
+                            _db_aug.close()
+
+                    elif _intent == "FACT_RECALL" and not _is_anonymous and _user_id:
+                        from database import Database as _DBAug
+                        _db_aug = _DBAug(_db_path)
+                        try:
+                            _facts = _mem_mod.recall(_db_aug, _user_id, _user_message, limit=5)
+                            if _facts:
+                                _system_prompt += (
+                                    "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
+                                )
+                        finally:
+                            _db_aug.close()
+                except Exception as _dispatch_err:
+                    print(f"[DISPATCH] non-fatal: {_dispatch_err}")
+
                 # Stream from Ollama — no longer blocked by TTS synthesis
                 user_name = _user['name'] if _user else 'Visitante'
                 ilog("LLM", f"Geração iniciada (model={_ollama_model}, user={user_name})")
@@ -1294,6 +1332,21 @@ Seja direto, objetivo e conciso."""
                 else:
                     # No audio player — send response_done immediately
                     sse_manager.push_event(session_id, 'response_done', {})
+
+                # Async FACT_STORE: extract and persist personal fact post-stream
+                if _intent == "FACT_STORE" and not _is_anonymous and _user_id:
+                    _msg_snap = _user_message
+                    _uid_snap = _user_id
+                    def _extract_async():
+                        try:
+                            from database import Database as _DBAsync
+                            from voice_assistant import memory as _mem_async
+                            _db_x = _DBAsync(_db_path)
+                            _mem_async.extract_and_store(_db_x, _uid_snap, _msg_snap, ollama_client)
+                            _db_x.close()
+                        except Exception as _ex:
+                            print(f"[MEMORY] extract failed (non-fatal): {_ex}")
+                    threading.Thread(target=_extract_async, daemon=True, name="MemExtract").start()
 
                 # Save assistant response to DB
                 if not _is_anonymous and _user_id:

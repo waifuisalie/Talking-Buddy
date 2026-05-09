@@ -617,3 +617,36 @@ class Database:
             (corpus_id, query_embedding, k),
         )
         return cur.fetchall()
+
+    # ── Ordered memory helpers ──────────────────────────────────────────────
+
+    def add_memory(self, user_id: int, event_type: str, content: str,
+                   extracted_value: Optional[str] = None,
+                   occurred_at: Optional[str] = None,
+                   source: str = "voice") -> int:
+        from datetime import datetime, timezone
+        created_at = datetime.now(timezone.utc).isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO user_memories (user_id, event_type, content, extracted_value, "
+            "occurred_at, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, event_type, content, extracted_value, occurred_at, created_at, source),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def recall_memory_fts(self, user_id: int, query: str, limit: int = 5) -> List[sqlite3.Row]:
+        """FTS5 search across user_memories for this user, newest-first."""
+        cur = self.conn.cursor()
+        # FTS5 content table — join on rowid to get occurred_at and created_at
+        cur.execute(
+            "SELECT m.id, m.event_type, m.content, m.extracted_value, "
+            "m.occurred_at, m.created_at "
+            "FROM user_memories_fts f "
+            "JOIN user_memories m ON m.id = f.rowid "
+            "WHERE f.content MATCH ? AND m.user_id = ? "
+            "ORDER BY m.occurred_at DESC, m.created_at DESC "
+            "LIMIT ?",
+            (query, user_id, limit),
+        )
+        return cur.fetchall()
