@@ -1,0 +1,10 @@
+FROM qwen3.5:2b
+TEMPLATE {{ .Prompt }}
+SYSTEM "You are a helpful assistant. /no_think"
+RENDERER qwen3.5
+PARSER qwen3.5
+PARAMETER presence_penalty 1.5
+PARAMETER temperature 1
+reasoning_effort="none"
+PARAMETER top_k 20
+PARAMETER top_p 0.95
