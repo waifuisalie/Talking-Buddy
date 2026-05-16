@@ -1156,6 +1156,7 @@ Seja direto, objetivo e conciso."""
         _ollama_model = ollama_model
 
         def streaming_pipeline():
+            nonlocal _system_prompt
             try:
                 user_name = _user['name'] if _user else 'Visitante'
                 print(f"🤖 [SSE] Streaming resposta para {user_name}...")
