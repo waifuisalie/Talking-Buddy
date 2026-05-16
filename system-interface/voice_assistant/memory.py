@@ -123,7 +123,6 @@ def _to_fts_query(text: str) -> str:
     # Drop very common Portuguese stopwords that break FTS precision
     _STOPWORDS = {"que", "para", "com", "uma", "por", "mas", "foi", "ele",
                   "ela", "dos", "das", "nos", "nas", "seu", "sua", "esse",
-                  "essa", "isto", "aqui", "ali", "como", "mais", "quando",
-                  "tomei", "meu", "minha"}
+                  "essa", "isto", "aqui", "ali", "como", "mais", "quando"}
     tokens = [t for t in tokens if t not in _STOPWORDS]
     return " ".join(tokens)
