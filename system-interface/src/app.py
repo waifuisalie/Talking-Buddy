@@ -1281,6 +1281,12 @@ Seja direto, objetivo e conciso."""
                                 _system_prompt += (
                                     "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
                                 )
+                            else:
+                                _prompted_message += (
+                                    "\n[Sistema: não há nenhum registro pessoal relacionado a "
+                                    "esta pergunta. Responda dizendo que você não tem essa "
+                                    "informação registrada. NÃO invente nem suponha fatos.]"
+                                )
                         finally:
                             _db_aug.close()
                 except Exception as _dispatch_err:
