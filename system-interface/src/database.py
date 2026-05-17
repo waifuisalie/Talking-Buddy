@@ -168,6 +168,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_vec USING vec0(
   corpus_id INTEGER PARTITION KEY,
   embedding FLOAT[{EMBEDDING_DIM}]
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS user_memories_vec USING vec0(
+  user_id INTEGER PARTITION KEY,
+  embedding FLOAT[{EMBEDDING_DIM}]
+);
 """
 
 
@@ -623,7 +628,8 @@ class Database:
     def add_memory(self, user_id: int, event_type: str, content: str,
                    extracted_value: Optional[str] = None,
                    occurred_at: Optional[str] = None,
-                   source: str = "voice") -> int:
+                   source: str = "voice",
+                   embedding: Optional[bytes] = None) -> int:
         from datetime import datetime, timezone
         created_at = datetime.now(timezone.utc).isoformat()
         cur = self.conn.cursor()
@@ -632,8 +638,47 @@ class Database:
             "occurred_at, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, event_type, content, extracted_value, occurred_at, created_at, source),
         )
+        row_id = cur.lastrowid
+        if embedding is not None and self.vec_available:
+            cur.execute(
+                "INSERT INTO user_memories_vec(rowid, user_id, embedding) VALUES (?, ?, ?)",
+                (row_id, user_id, embedding),
+            )
         self.conn.commit()
-        return cur.lastrowid
+        return row_id
+
+    def vector_search_memory(self, user_id: int, query_embedding: bytes,
+                             k: int = 5) -> List[sqlite3.Row]:
+        """Return top-k user memories for a query, scoped by user_id partition key."""
+        if not self.vec_available:
+            return []
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT m.id, m.event_type, m.content, m.extracted_value, "
+            "m.occurred_at, m.created_at, v.distance "
+            "FROM user_memories_vec v "
+            "JOIN user_memories m ON m.id = v.rowid "
+            "WHERE v.user_id = ? AND v.embedding MATCH ? AND k = ? "
+            "ORDER BY v.distance",
+            (user_id, query_embedding, k),
+        )
+        return cur.fetchall()
+
+    def memories_missing_embedding(self) -> List[sqlite3.Row]:
+        """Rows in user_memories that have no paired user_memories_vec entry.
+
+        Returns an empty list if vec is unavailable (nothing to backfill into).
+        """
+        if not self.vec_available:
+            return []
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT m.id, m.user_id, m.content FROM user_memories m "
+            "LEFT JOIN user_memories_vec v ON v.rowid = m.id "
+            "WHERE v.rowid IS NULL "
+            "ORDER BY m.id"
+        )
+        return cur.fetchall()
 
     def recall_memory_fts(self, user_id: int, query: str, limit: int = 5) -> List[sqlite3.Row]:
         """FTS5 search across user_memories for this user, newest-first."""

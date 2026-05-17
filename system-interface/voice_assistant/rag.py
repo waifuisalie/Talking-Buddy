@@ -23,7 +23,7 @@ def embed_query(text: str) -> Optional[bytes]:
     try:
         resp = requests.post(
             _EMBED_URL,
-            json={"model": _EMBED_MODEL, "input": text},
+            json={"model": _EMBED_MODEL, "input": text, "keep_alive": -1},
             timeout=_EMBED_TIMEOUT,
         )
         if resp.status_code != 200:

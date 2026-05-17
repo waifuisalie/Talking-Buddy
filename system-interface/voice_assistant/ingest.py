@@ -324,6 +324,40 @@ def cmd_doc_list(args, db: Database) -> int:
     return 0
 
 
+def cmd_memory_backfill(args, db: Database) -> int:
+    """Embed user_memories rows that are missing a user_memories_vec entry."""
+    if not db.vec_available:
+        print("sqlite-vec indisponível — backfill abortado")
+        return 1
+    rows = db.memories_missing_embedding()
+    if not rows:
+        print("nenhuma memória pendente de embedding")
+        return 0
+    print(f"{len(rows)} memória(s) sem embedding — gerando...")
+    ok = 0
+    fail = 0
+    for r in rows:
+        vec = _embed_text(r["content"])
+        if vec is None:
+            print(f"  id={r['id']} user={r['user_id']}: embed falhou")
+            fail += 1
+            continue
+        try:
+            packed = _pack_floats(vec)
+            db.conn.execute(
+                "INSERT INTO user_memories_vec(rowid, user_id, embedding) VALUES (?, ?, ?)",
+                (r["id"], r["user_id"], packed),
+            )
+            db.conn.commit()
+            ok += 1
+            print(f"  id={r['id']} user={r['user_id']}: ok")
+        except Exception as e:
+            print(f"  id={r['id']} user={r['user_id']}: insert falhou: {e}")
+            fail += 1
+    print(f"backfill concluído: {ok} ok, {fail} falha(s)")
+    return 0 if fail == 0 else 1
+
+
 def cmd_doc_delete(args, db: Database) -> int:
     doc = db.get_document(args.doc_id)
     if not doc:
@@ -378,6 +412,15 @@ def main() -> int:
     pd_delete = pds.add_parser("delete", help="delete a document")
     pd_delete.add_argument("--doc-id", type=int, required=True, dest="doc_id")
     pd_delete.set_defaults(func=cmd_doc_delete)
+
+    pm = sp.add_parser("memory", help="manage user memory embeddings")
+    pms = pm.add_subparsers(dest="action", required=True)
+
+    pm_backfill = pms.add_parser(
+        "backfill",
+        help="embed user_memories rows that don't yet have a vec entry",
+    )
+    pm_backfill.set_defaults(func=cmd_memory_backfill)
 
     args = p.parse_args()
     db = Database(DB_PATH)

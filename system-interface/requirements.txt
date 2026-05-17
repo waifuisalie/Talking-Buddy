@@ -17,3 +17,4 @@ scipy
 scikit-learn
 sqlite-vec>=0.1.6
 pypdf>=4.0.0
+dateparser>=1.2.0
