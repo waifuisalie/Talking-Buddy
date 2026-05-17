@@ -1255,6 +1255,13 @@ Seja direto, objetivo e conciso."""
                     from voice_assistant import rag as _rag_mod
                     from voice_assistant import memory as _mem_mod
                     _intent = _disp.classify(_user_message, language=_tts_language)
+                    # Safety net: questions don't store facts. Bridges the common
+                    # dispatcher mis-classification where "tomei meu remédio hoje?"
+                    # is labeled FACT_STORE and pollutes user_memories with the
+                    # question itself + a hallucinated extracted_value.
+                    if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
+                        ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
+                        _intent = "FACT_RECALL"
                     ilog("DISPATCH", f"Intent: {_intent}")
 
                     if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
