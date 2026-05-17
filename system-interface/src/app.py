@@ -1087,13 +1087,37 @@ def api_chat_send():
         user_message = data.get('message', '').strip()
         rfid = data.get('rfid', '')
 
+        # Phase 9 — Translation mode parameters (all optional)
+        mode = (data.get('mode') or 'chat').strip().lower()
+        source_lang = (data.get('source_lang') or '').strip().lower()
+        target_lang = (data.get('target_lang') or '').strip().lower()
+        last_turn = data.get('last_turn')
+        is_translation = (mode == 'translation')
+
         if not user_message:
             return jsonify({'success': False, 'error': 'Mensagem vazia'}), 400
 
-        # --- Resolve user & context (same logic as before) ---
-        is_anonymous = (not rfid or rfid == 'anonymous')
+        if is_translation:
+            _VALID_LANGS = {'pt', 'en', 'es'}
+            if source_lang not in _VALID_LANGS or target_lang not in _VALID_LANGS:
+                return jsonify({'success': False,
+                                'error': 'source_lang/target_lang must be pt|en|es'}), 400
+            if source_lang == target_lang:
+                return jsonify({'success': False,
+                                'error': 'source_lang and target_lang must differ'}), 400
 
-        if is_anonymous:
+        # --- Resolve user & context (same logic as before) ---
+        # Translation mode is always treated as anonymous: no DB writes,
+        # no personality, no memory, no RAG.
+        is_anonymous = is_translation or (not rfid or rfid == 'anonymous')
+
+        if is_translation:
+            print(f"🌐 [API] Modo tradução: {source_lang} → {target_lang}")
+            user = None
+            user_id = None
+            conversation_context = []
+            system_prompt = _build_translation_prompt(source_lang, target_lang, last_turn)
+        elif is_anonymous:
             print(f"🤖 [API] Modo anônimo ativado")
             user = None
             user_id = None
@@ -1127,8 +1151,13 @@ Seja direto, objetivo e conciso."""
         # Per-request TTS parameters (no shared-state mutation)
         _LANG_MAP = {"pt-BR": "pt", "en-US": "en", "es-ES": "es"}
         _tts_personality = personality_id
-        _tts_language = _LANG_MAP.get(user["language"], "pt") if user else "pt"
-        _tts_gender = user["persona_gender"] if user else "male"
+        if is_translation:
+            # Speak in the listener's language; voice is neutral male.
+            _tts_language = target_lang
+            _tts_gender = "male"
+        else:
+            _tts_language = _LANG_MAP.get(user["language"], "pt") if user else "pt"
+            _tts_gender = user["persona_gender"] if user else "male"
 
         user_name = user["name"] if user else "anonymous"
         print(f"🎤 [TTS-WIRE] User='{user_name}' | personality='{_tts_personality}' | gender='{_tts_gender}' | language='{_tts_language}'")
@@ -1152,6 +1181,9 @@ Seja direto, objetivo e conciso."""
         _user = dict(user) if user else None
         _user_id = user_id
         _is_anonymous = is_anonymous
+        _is_translation = is_translation
+        _source_lang = source_lang if is_translation else None
+        _target_lang = target_lang if is_translation else None
         _db_path = DB_PATH
         _ollama_model = ollama_model
 
@@ -1210,6 +1242,10 @@ Seja direto, objetivo e conciso."""
                         sentence = tts_sentence_queue.get()
                         if sentence is None:  # sentinel — stop worker
                             break
+                        # If the client cancelled, skip synthesis but keep
+                        # draining the queue so the producer can exit cleanly.
+                        if sse_manager.is_cancelled(session_id):
+                            continue
                         try:
                             _tts_sentence_counter[0] += 1
                             _idx = _tts_sentence_counter[0]
@@ -1240,64 +1276,77 @@ Seja direto, objetivo e conciso."""
                 # override the system prompt instruction — placing the reminder in the
                 # user message itself keeps it in the immediate context where it has
                 # much stronger weight.
-                _LANGUAGE_REMINDERS = {
-                    'pt': '[Responda sempre em português brasileiro]',
-                    'en': '[Always respond in English, no matter what language I write in]',
-                    'es': '[Responde siempre en español, sin importar el idioma que use]',
-                }
-                _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
-                _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
+                # In translation mode we wrap the message with the strict
+                # "translate, don't answer" template — Gemma3:1b honors directives
+                # in the user message far more reliably than in the system prompt
+                # tail (proven during Phase 8 with the no-invent guard).
+                if _is_translation:
+                    _prompted_message = _format_translation_user_message(
+                        _user_message, _source_lang, _target_lang
+                    )
+                else:
+                    _LANGUAGE_REMINDERS = {
+                        'pt': '[Responda sempre em português brasileiro]',
+                        'en': '[Always respond in English, no matter what language I write in]',
+                        'es': '[Responde siempre en español, sin importar el idioma que use]',
+                    }
+                    _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
+                    _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
 
-                # Dispatcher: classify intent and augment system prompt
+                # Dispatcher: classify intent and augment system prompt.
+                # Translation mode bypasses dispatcher/RAG/memory entirely — the
+                # only thing the LLM does is translate, and we save ~80-200ms of
+                # classifier latency by skipping the call.
                 _intent = "CHITCHAT"
-                try:
-                    from voice_assistant import dispatcher as _disp
-                    from voice_assistant import rag as _rag_mod
-                    from voice_assistant import memory as _mem_mod
-                    _intent = _disp.classify(_user_message, language=_tts_language)
-                    # Safety net: questions don't store facts. Bridges the common
-                    # dispatcher mis-classification where "tomei meu remédio hoje?"
-                    # is labeled FACT_STORE and pollutes user_memories with the
-                    # question itself + a hallucinated extracted_value.
-                    if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
-                        ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
-                        _intent = "FACT_RECALL"
-                    ilog("DISPATCH", f"Intent: {_intent}")
+                if not _is_translation:
+                    try:
+                        from voice_assistant import dispatcher as _disp
+                        from voice_assistant import rag as _rag_mod
+                        from voice_assistant import memory as _mem_mod
+                        _intent = _disp.classify(_user_message, language=_tts_language)
+                        # Safety net: questions don't store facts. Bridges the common
+                        # dispatcher mis-classification where "tomei meu remédio hoje?"
+                        # is labeled FACT_STORE and pollutes user_memories with the
+                        # question itself + a hallucinated extracted_value.
+                        if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
+                            ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
+                            _intent = "FACT_RECALL"
+                        ilog("DISPATCH", f"Intent: {_intent}")
 
-                    if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
-                        from database import Database as _DBAug
-                        _db_aug = _DBAug(_db_path)
-                        try:
-                            _snippet = _rag_mod.retrieve_context(
-                                _db_aug, _user["specialization_id"], _user_message, k=3
-                            )
-                            if _snippet:
-                                _system_prompt += (
-                                    "\n\n[Contexto relevante da especialização do assistente"
-                                    " — cite quando responder]:\n" + _snippet
+                        if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
+                            from database import Database as _DBAug
+                            _db_aug = _DBAug(_db_path)
+                            try:
+                                _snippet = _rag_mod.retrieve_context(
+                                    _db_aug, _user["specialization_id"], _user_message, k=3
                                 )
-                        finally:
-                            _db_aug.close()
+                                if _snippet:
+                                    _system_prompt += (
+                                        "\n\n[Contexto relevante da especialização do assistente"
+                                        " — cite quando responder]:\n" + _snippet
+                                    )
+                            finally:
+                                _db_aug.close()
 
-                    elif _intent == "FACT_RECALL" and not _is_anonymous and _user_id:
-                        from database import Database as _DBAug
-                        _db_aug = _DBAug(_db_path)
-                        try:
-                            _facts = _mem_mod.recall(_db_aug, _user_id, _user_message, limit=5)
-                            if _facts:
-                                _system_prompt += (
-                                    "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
-                                )
-                            else:
-                                _prompted_message += (
-                                    "\n[Sistema: não há nenhum registro pessoal relacionado a "
-                                    "esta pergunta. Responda dizendo que você não tem essa "
-                                    "informação registrada. NÃO invente nem suponha fatos.]"
-                                )
-                        finally:
-                            _db_aug.close()
-                except Exception as _dispatch_err:
-                    print(f"[DISPATCH] non-fatal: {_dispatch_err}")
+                        elif _intent == "FACT_RECALL" and not _is_anonymous and _user_id:
+                            from database import Database as _DBAug
+                            _db_aug = _DBAug(_db_path)
+                            try:
+                                _facts = _mem_mod.recall(_db_aug, _user_id, _user_message, limit=5)
+                                if _facts:
+                                    _system_prompt += (
+                                        "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
+                                    )
+                                else:
+                                    _prompted_message += (
+                                        "\n[Sistema: não há nenhum registro pessoal relacionado a "
+                                        "esta pergunta. Responda dizendo que você não tem essa "
+                                        "informação registrada. NÃO invente nem suponha fatos.]"
+                                    )
+                            finally:
+                                _db_aug.close()
+                    except Exception as _dispatch_err:
+                        print(f"[DISPATCH] non-fatal: {_dispatch_err}")
 
                 # Stream from Ollama — no longer blocked by TTS synthesis
                 user_name = _user['name'] if _user else 'Visitante'
@@ -1311,6 +1360,12 @@ Seja direto, objetivo e conciso."""
                     conversation_context=_conversation_context,
                     model=_ollama_model
                 ):
+                    # Client cancelled (e.g. user tapped retry on the last bubble).
+                    # Break out of the LLM loop within one token of latency.
+                    if sse_manager.is_cancelled(session_id):
+                        ilog("LLM", "Cancelled by client — aborting stream")
+                        break
+
                     if not chunk:
                         continue
 
@@ -1411,6 +1466,40 @@ def api_chat_stream(session_id):
             'X-Accel-Buffering': 'no'
         }
     )
+
+
+@app.route('/api/chat/cancel', methods=['POST'])
+def api_chat_cancel():
+    """Cancel an in-flight chat session.
+
+    Used by translation-mode retry: the client taps the last bubble, we mark
+    the SSE session cancelled so the LLM/TTS loops break out, and we drain
+    the audio queue so any in-flight playback stops mid-sentence.
+
+    Request JSON:  { "session_id": "uuid" }
+    Response JSON: { "success": true, "cancelled": <bool> }
+    """
+    try:
+        data = request.get_json() or {}
+        sid = (data.get('session_id') or '').strip()
+        if not sid:
+            return jsonify({'success': False, 'error': 'session_id required'}), 400
+
+        found = sse_manager.mark_cancelled(sid)
+
+        # Stop any audio already queued / playing on the Pi speaker.
+        if audio_player and audio_player.is_available():
+            try:
+                audio_player.stop_queue_playback(clear_queue=True)
+            except Exception as e:
+                print(f"⚠️  [CANCEL] audio_player.stop_queue_playback error: {e}")
+
+        if found:
+            print(f"🛑 [CANCEL] session {sid[:8]}… cancelled")
+        return jsonify({'success': True, 'cancelled': found})
+    except Exception as e:
+        print(f"❌ [CANCEL] {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/chat/send_sync', methods=['POST'])
@@ -1952,6 +2041,69 @@ def _resolve_personality_for_user(user) -> str:
     return RESPONSE_STYLE_TO_PERSONALITY.get(
         user['response_style'] if user else 'neutral (balanced)',
         'neutral'
+    )
+
+
+_TRANSLATION_LANG_NAMES = {"pt": "Portuguese", "en": "English", "es": "Spanish"}
+
+
+def _build_translation_prompt(source_lang: str, target_lang: str,
+                              last_turn=None) -> str:
+    """System prompt for translation mode (Phase 9).
+
+    Gemma3:1b is small and falls back to chat-completion behavior when the
+    system prompt is loose. We keep this prompt extremely strict — explicit
+    rule numbering helps; the "tell me a joke" example pins the model's
+    most common failure mode (answering the message instead of translating
+    it). `last_turn`, when provided, is a one-utterance disambiguation
+    cue, never to be translated or echoed.
+    """
+    src = _TRANSLATION_LANG_NAMES.get(source_lang, source_lang)
+    tgt = _TRANSLATION_LANG_NAMES.get(target_lang, target_lang)
+    base = (
+        f"You are a strict translation engine. You translate text from "
+        f"{src} to {tgt}. You NEVER do anything else.\n\n"
+        f"RULES (absolute, never break):\n"
+        f"1. You translate ONLY. If the input is a question, you produce "
+        f"the {tgt} version of the question. If the input is a request "
+        f"('tell me a joke'), you produce the {tgt} request — you do NOT "
+        f"answer or fulfill it.\n"
+        f"2. Output ONLY the {tgt} translation. No quotes, no labels, "
+        f"no commentary, no preamble like 'Translation:' or 'Here is'.\n"
+        f"3. Preserve meaning, tone, and naturalness. Do not translate "
+        f"word-for-word; do not add or remove information.\n"
+        f"4. If the input is already in {tgt}, output it unchanged."
+    )
+    if last_turn:
+        # Escape embedded quotes lightly
+        clean = str(last_turn).replace('"', "'").strip()
+        if clean:
+            base += (
+                f"\n\nContext (DO NOT translate, DO NOT echo — use only to "
+                f"resolve pronouns or short replies): the user's reply "
+                f"refers to: \"{clean}\""
+            )
+    return base
+
+
+def _format_translation_user_message(user_message: str,
+                                     source_lang: str,
+                                     target_lang: str) -> str:
+    """Wrap the user message for translation mode.
+
+    Small models attend much more strongly to instructions placed in the
+    user message itself than to system-prompt tails. The trailing
+    `{target}:` marker also primes the model to complete with a
+    translation rather than a chat reply.
+    """
+    src = _TRANSLATION_LANG_NAMES.get(source_lang, source_lang)
+    tgt = _TRANSLATION_LANG_NAMES.get(target_lang, target_lang)
+    return (
+        f"Translate the following {src} sentence into {tgt}. "
+        f"Do NOT answer it, do NOT respond to it, do NOT add anything. "
+        f"Output ONLY the {tgt} translation.\n\n"
+        f"{src}: {user_message}\n"
+        f"{tgt}:"
     )
 
 

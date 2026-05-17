@@ -1083,6 +1083,13 @@ class ChatManager {
     }
     
     onWakeWordDetected() {
+        // Translation mode owns the UI when active — wake word is ignored
+        // so it doesn't accidentally open the regular chat panel mid-translation.
+        if (window.translationMode && window.translationMode.isActive && window.translationMode.isActive()) {
+            console.log('🔕 Wake word ignorado (modo tradução ativo)');
+            return;
+        }
+
         // Debounce frontend - evitar múltiplas ativações
         const now = Date.now();
         if (now - this.lastWakeWordTime < this.wakeWordDebounceTime) {
@@ -1090,7 +1097,7 @@ class ChatManager {
             return;
         }
         this.lastWakeWordTime = now;
-        
+
         console.log('🔔 Wake word detectado - iniciando ação');
 
         // O beep agora é tocado pelo backend (sync) em /api/voice/record_and_transcribe,
@@ -1273,7 +1280,7 @@ class ChatManager {
     showUserGreeting(name) {
         if (this.userNameDisplay) {
             const loggedInLabel = window.i18n.t('labels.logged_in');
-            this.userNameDisplay.innerHTML = `<strong>✅ ${loggedInLabel}:</strong> ${name}`;
+            this.userNameDisplay.innerHTML = `<strong>${loggedInLabel}:</strong> ${name}`;
         }
         if (this.userGreeting) {
             this.userGreeting.classList.remove('hidden');
