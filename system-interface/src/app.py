@@ -1191,6 +1191,8 @@ Seja direto, objetivo e conciso."""
             nonlocal _system_prompt
             try:
                 user_name = _user['name'] if _user else 'Visitante'
+                _pipeline_t0 = time.perf_counter()
+                _timing = {}  # keyed by stage name, value = elapsed seconds
                 print(f"🤖 [SSE] Streaming resposta para {user_name}...")
 
                 # Set up audio queue
@@ -1257,6 +1259,8 @@ Seja direto, objetivo e conciso."""
                                 gender=_tts_gender,
                             )
                             synth_time = time.perf_counter() - _t0
+                            if _idx == 1:
+                                _timing['tts_s1'] = synth_time
                             audio_dur = _wav_duration(audio_file) if audio_file else 0.0
                             rtf = synth_time / audio_dur if audio_dur > 0 else 0.0
                             ilog("TTS", f"Frase {_idx}: {synth_time:.2f}s | RTF={rtf:.3f} | \"{sentence[:50]}\"")
@@ -1303,7 +1307,9 @@ Seja direto, objetivo e conciso."""
                         from voice_assistant import dispatcher as _disp
                         from voice_assistant import rag as _rag_mod
                         from voice_assistant import memory as _mem_mod
+                        _t_disp = time.perf_counter()
                         _intent = _disp.classify(_user_message, language=_tts_language)
+                        _timing['dispatcher'] = time.perf_counter() - _t_disp
                         # Safety net: questions don't store facts. Bridges the common
                         # dispatcher mis-classification where "tomei meu remédio hoje?"
                         # is labeled FACT_STORE and pollutes user_memories with the
@@ -1311,15 +1317,18 @@ Seja direto, objetivo e conciso."""
                         if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
                             ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
                             _intent = "FACT_RECALL"
-                        ilog("DISPATCH", f"Intent: {_intent}")
+                        ilog("DISPATCH", f"Intent: {_intent} ({_timing['dispatcher']:.2f}s)")
 
                         if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
                             from database import Database as _DBAug
                             _db_aug = _DBAug(_db_path)
                             try:
+                                _t_rag = time.perf_counter()
                                 _snippet = _rag_mod.retrieve_context(
                                     _db_aug, _user["specialization_id"], _user_message, k=3
                                 )
+                                _timing['rag'] = time.perf_counter() - _t_rag
+                                ilog("RAG", f"Retrieval: {_timing['rag']:.2f}s | chunks={'yes' if _snippet else 'none'}")
                                 if _snippet:
                                     _system_prompt += (
                                         "\n\n[Contexto relevante da especialização do assistente"
@@ -1332,7 +1341,10 @@ Seja direto, objetivo e conciso."""
                             from database import Database as _DBAug
                             _db_aug = _DBAug(_db_path)
                             try:
+                                _t_mem = time.perf_counter()
                                 _facts = _mem_mod.recall(_db_aug, _user_id, _user_message, limit=5)
+                                _timing['memory'] = time.perf_counter() - _t_mem
+                                ilog("MEMORY", f"Recall: {_timing['memory']:.2f}s | facts={'yes' if _facts else 'none'}")
                                 if _facts:
                                     _system_prompt += (
                                         "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
@@ -1347,6 +1359,17 @@ Seja direto, objetivo e conciso."""
                                 _db_aug.close()
                     except Exception as _dispatch_err:
                         print(f"[DISPATCH] non-fatal: {_dispatch_err}")
+
+                # Pre-LLM timing summary
+                _pre_llm = time.perf_counter() - _pipeline_t0
+                _timing['pre_llm'] = _pre_llm
+                _disp_s  = f"{_timing['dispatcher']:.2f}s" if 'dispatcher' in _timing else "skipped"
+                _rag_s   = f"{_timing['rag']:.2f}s"        if 'rag'        in _timing else "skipped"
+                _mem_s   = f"{_timing['memory']:.2f}s"     if 'memory'     in _timing else "skipped"
+                ilog("TIMING", (
+                    f"Pre-LLM: {_pre_llm:.2f}s total  |  "
+                    f"dispatcher={_disp_s}  rag={_rag_s}  memory={_mem_s}"
+                ))
 
                 # Stream from Ollama — no longer blocked by TTS synthesis
                 user_name = _user['name'] if _user else 'Visitante'
@@ -1384,6 +1407,8 @@ Seja direto, objetivo e conciso."""
                         tts_sentence_queue.put(sentence)
 
                 _llm_total = time.perf_counter() - _llm_t0
+                _timing['llm_ttft']  = _llm_ttft or 0.0
+                _timing['llm_total'] = _llm_total
                 ilog("LLM", f"Concluído: {_llm_total:.2f}s | {len(full_response)} chars")
 
                 # Flush remaining text into TTS worker
@@ -1394,6 +1419,15 @@ Seja direto, objetivo e conciso."""
                 # Stop TTS worker and wait for all synthesis to finish
                 tts_sentence_queue.put(None)
                 tts_thread.join()
+
+                _turn_total = time.perf_counter() - _pipeline_t0
+                ilog("TIMING", (
+                    f"── Turn complete: {_turn_total:.2f}s ──  "
+                    f"pre-LLM={_timing.get('pre_llm',0):.2f}s  "
+                    f"LLM-TTFT={_timing.get('llm_ttft',0):.2f}s  "
+                    f"LLM-gen={_timing.get('llm_total',0):.2f}s  "
+                    f"TTS-s1={_timing.get('tts_s1',0):.2f}s"
+                ))
 
                 # Signal generation complete
                 if audio_player and audio_player.is_available():
