@@ -936,6 +936,7 @@ def novo_usuario():
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
             specialization_id = _parse_specialization_id(data.get('specialization_id'))
+            memory_enabled = 1 if str(data.get('memory_enabled', '0')) == '1' else 0
 
             # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
@@ -950,7 +951,7 @@ def novo_usuario():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado!'})
 
             # Adiciona usuário
-            get_db().add_user(name, rfid, response_style, persona_gender, language, specialization_id)
+            get_db().add_user(name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled)
             return jsonify({'success': True, 'message': 'Usuário cadastrado com sucesso!', 'redirect': '/usuarios/lista'})
 
         except Exception as e:
@@ -984,6 +985,7 @@ def editar_usuario(user_id):
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
             specialization_id = _parse_specialization_id(data.get('specialization_id'))
+            memory_enabled = 1 if str(data.get('memory_enabled', '0')) == '1' else 0
 
             # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
@@ -998,7 +1000,7 @@ def editar_usuario(user_id):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário!'})
 
             # Atualiza
-            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language, specialization_id)
+            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled)
             return jsonify({'success': True, 'message': 'Usuário atualizado com sucesso!', 'redirect': '/usuarios/lista'})
 
         except Exception as e:
@@ -1298,11 +1300,14 @@ Seja direto, objetivo e conciso."""
                     _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
 
                 # Dispatcher: classify intent and augment system prompt.
-                # Translation mode bypasses dispatcher/RAG/memory entirely — the
-                # only thing the LLM does is translate, and we save ~80-200ms of
-                # classifier latency by skipping the call.
+                # Only runs when the user has at least one feature that needs it:
+                # specialization (RAG) or memory. Pure chitchat users skip this
+                # entirely, saving the ~80-200ms Ollama classifier call.
+                # Translation mode also bypasses it unconditionally.
+                _has_rag    = bool(_user and _user.get("specialization_id"))
+                _has_memory = bool(_user and _user.get("memory_enabled", 1))
                 _intent = "CHITCHAT"
-                if not _is_translation:
+                if not _is_translation and (_has_rag or _has_memory):
                     try:
                         from voice_assistant import dispatcher as _disp
                         from voice_assistant import rag as _rag_mod

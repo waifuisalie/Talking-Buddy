@@ -245,6 +245,14 @@ class Database:
                 "ALTER TABLE users ADD COLUMN specialization_id INTEGER REFERENCES rag_corpora(id)"
             )
 
+        # Migração idempotente: adiciona users.memory_enabled se ausente
+        # DEFAULT 1 preserva o comportamento de usuários existentes (memória ativa)
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(users)")}
+        if "memory_enabled" not in cols:
+            self.conn.execute(
+                "ALTER TABLE users ADD COLUMN memory_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+
         self.conn.commit()
 
     def close(self):
@@ -299,7 +307,7 @@ class Database:
         """Lista todos os usuários ordenados por nome"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, created_at "
             "FROM users ORDER BY name COLLATE NOCASE"
         )
         return cur.fetchall()
@@ -308,7 +316,7 @@ class Database:
         """Busca um usuário por ID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, created_at "
             "FROM users WHERE id=?",
             (user_id,),
         )
@@ -318,7 +326,7 @@ class Database:
         """Busca um usuário por RFID"""
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, created_at "
+            "SELECT id, name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, created_at "
             "FROM users WHERE rfid=?",
             (rfid,),
         )
@@ -344,29 +352,31 @@ class Database:
     
     def add_user(self, name: str, rfid: str, response_style: str,
                  persona_gender: str, language: str,
-                 specialization_id: Optional[int] = None) -> int:
+                 specialization_id: Optional[int] = None,
+                 memory_enabled: int = 0) -> int:
         """
         Adiciona um novo usuário
         Retorna o ID do usuário criado
         """
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT INTO users(name, rfid, response_style, persona_gender, language, specialization_id, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (name, rfid, response_style, persona_gender, language, specialization_id, now_iso()),
+            "INSERT INTO users(name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, now_iso()),
         )
         self.conn.commit()
         return cur.lastrowid
 
     def update_user(self, user_id: int, name: str, rfid: str,
                     response_style: str, persona_gender: str, language: str,
-                    specialization_id: Optional[int] = None) -> None:
+                    specialization_id: Optional[int] = None,
+                    memory_enabled: int = 0) -> None:
         """Atualiza dados de um usuário existente"""
         cur = self.conn.cursor()
         cur.execute(
-            "UPDATE users SET name=?, rfid=?, response_style=?, persona_gender=?, language=?, specialization_id=? "
-            "WHERE id=?",
-            (name, rfid, response_style, persona_gender, language, specialization_id, user_id),
+            "UPDATE users SET name=?, rfid=?, response_style=?, persona_gender=?, language=?, "
+            "specialization_id=?, memory_enabled=? WHERE id=?",
+            (name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled, user_id),
         )
         self.conn.commit()
 
