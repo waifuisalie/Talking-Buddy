@@ -425,9 +425,9 @@ class ChatManager {
         // Clear input
         this.inputField.value = '';
         
-        // Update virtual keyboard display if visible
-        const keyboardDisplay = document.getElementById('keyboard-display');
-        if (keyboardDisplay) keyboardDisplay.textContent = '';
+        // Update virtual keyboard display if visible (preserve cursor element)
+        const keyboardText = document.getElementById('keyboard-text');
+        if (keyboardText) keyboardText.textContent = '';
         
         // Robot thinking state
         if (robotAvatar) robotAvatar.setState('thinking');
