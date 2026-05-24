@@ -1988,8 +1988,8 @@ svg.battery-charging.hidden {
     backdrop-filter: blur(8px);
     display: flex;
     flex-direction: column;
-    padding: 70px 20px 20px 90px;  /* leave room for top buttons + left toggles */
-    gap: 12px;
+    padding: 70px 12px 10px 90px;  /* leave room for top buttons + left toggles */
+    gap: 8px;
 }
 
 .translation-interface.hidden {
@@ -2046,13 +2046,15 @@ svg.battery-charging.hidden {
 .translation-panels {
     flex: 1 1 auto;
     display: flex;
-    flex-direction: column;
-    gap: 12px;
-    min-height: 0;  /* allow children to scroll */
+    flex-direction: row;   /* side-by-side for landscape 848×480 */
+    gap: 10px;
+    min-height: 0;
+    min-width: 0;
 }
 
 .translation-panel {
-    flex: 1 1 50%;
+    flex: 1 1 0;           /* equal width split */
+    min-width: 0;
     display: flex;
     flex-direction: column;
     border: 2px solid rgba(0, 255, 0, 0.25);
@@ -2089,7 +2091,7 @@ svg.battery-charging.hidden {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 14px;
+    padding: 6px 10px;
     border-bottom: 1px solid rgba(0, 255, 0, 0.2);
     flex: 0 0 auto;
     font-weight: 600;
@@ -2097,7 +2099,14 @@ svg.battery-charging.hidden {
 }
 
 .translation-flag {
-    font-size: 1.4rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: rgba(0, 255, 0, 0.15);
+    border: 1px solid rgba(0, 255, 0, 0.4);
+    color: var(--accent-color);
 }
 
 .translation-lang-label {
@@ -2133,14 +2142,17 @@ svg.battery-charging.hidden {
 }
 
 .tr-bubble.tr-bubble--original {
-    align-self: flex-start;
-    background: rgba(0, 255, 0, 0.04);
+    align-self: flex-end;                        /* own message — right, like WhatsApp sent */
+    background: rgba(0, 180, 0, 0.18);
+    border-color: rgba(0, 255, 0, 0.35);
+    border-radius: 12px 2px 12px 12px;          /* top-right tail */
 }
 
 .tr-bubble.tr-bubble--translation {
-    align-self: flex-end;
-    background: rgba(0, 255, 0, 0.10);
-    border-color: rgba(0, 255, 0, 0.3);
+    align-self: flex-start;                      /* received translation — left */
+    background: rgba(0, 255, 0, 0.06);
+    border-color: rgba(0, 255, 0, 0.18);
+    border-radius: 2px 12px 12px 12px;          /* top-left tail */
 }
 
 /* Retryable: the last *committed* turn on the speaker's panel */
@@ -2158,7 +2170,7 @@ svg.battery-charging.hidden {
    Sits below the bubble in the column-flex bubbles list, aligned to
    the right (matches the speaker's own bubble alignment). */
 .tr-retry-btn {
-    align-self: flex-start;
+    align-self: flex-end;   /* matches right-aligned original bubble */
     margin-top: 2px;
     padding: 6px 14px;
     border: 2px solid var(--accent-color);
@@ -2328,11 +2340,11 @@ svg.battery-charging.hidden {
     font-weight: 600;
 }
 
-/* Tighten layout on smaller screens */
-@media (max-width: 768px) {
+/* Tighten layout on smaller screens — keep side-by-side row layout */
+@media (max-width: 848px) {
     .translation-interface {
-        padding: 84px 12px 12px 84px;
-        gap: 10px;
+        padding: 70px 8px 8px 84px;
+        gap: 6px;
     }
 
     .translation-toggle {

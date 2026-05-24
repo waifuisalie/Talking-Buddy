@@ -8,9 +8,9 @@
 
     // ----- Static config -----
     const PAIR_MAP = {
-        'pt-en': { left: 'pt', right: 'en', leftFlag: '🇧🇷', rightFlag: '🇺🇸' },
-        'pt-es': { left: 'pt', right: 'es', leftFlag: '🇧🇷', rightFlag: '🇪🇸' },
-        'en-es': { left: 'en', right: 'es', leftFlag: '🇺🇸', rightFlag: '🇪🇸' }
+        'pt-en': { left: 'pt', right: 'en', leftFlag: 'PT', rightFlag: 'EN' },
+        'pt-es': { left: 'pt', right: 'es', leftFlag: 'PT', rightFlag: 'ES' },
+        'en-es': { left: 'en', right: 'es', leftFlag: 'EN', rightFlag: 'ES' }
     };
 
     const LANG_LABEL = { pt: 'PT', en: 'EN', es: 'ES' };
