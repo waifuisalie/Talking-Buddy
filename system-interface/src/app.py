@@ -1309,12 +1309,27 @@ Seja direto, objetivo e conciso."""
                 _intent = "CHITCHAT"
                 if not _is_translation and (_has_rag or _has_memory):
                     try:
+                        import concurrent.futures as _cf
                         from voice_assistant import dispatcher as _disp
                         from voice_assistant import rag as _rag_mod
                         from voice_assistant import memory as _mem_mod
-                        _t_disp = time.perf_counter()
-                        _intent = _disp.classify(_user_message, language=_tts_language)
-                        _timing['dispatcher'] = time.perf_counter() - _t_disp
+
+                        # Run classifier and query embedding in parallel — they are
+                        # independent and both make Ollama HTTP calls. The embedding
+                        # result is passed directly to whichever branch wins, so we
+                        # never embed the same query twice.
+                        _t_parallel = time.perf_counter()
+                        with _cf.ThreadPoolExecutor(max_workers=2) as _ex:
+                            _f_intent = _ex.submit(
+                                _disp.classify, _user_message, _tts_language
+                            )
+                            _f_embed = _ex.submit(_rag_mod.embed_query, _user_message)
+
+                        _intent    = _f_intent.result()
+                        _embedding = _f_embed.result()   # bytes or None
+                        _timing['dispatcher'] = time.perf_counter() - _t_parallel
+                        ilog("DISPATCH", f"Parallel dispatch+embed: {_timing['dispatcher']:.2f}s")
+
                         # Safety net: questions don't store facts. Bridges the common
                         # dispatcher mis-classification where "tomei meu remédio hoje?"
                         # is labeled FACT_STORE and pollutes user_memories with the
@@ -1322,7 +1337,7 @@ Seja direto, objetivo e conciso."""
                         if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
                             ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
                             _intent = "FACT_RECALL"
-                        ilog("DISPATCH", f"Intent: {_intent} ({_timing['dispatcher']:.2f}s)")
+                        ilog("DISPATCH", f"Intent: {_intent}")
 
                         if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
                             from database import Database as _DBAug
@@ -1330,7 +1345,8 @@ Seja direto, objetivo e conciso."""
                             try:
                                 _t_rag = time.perf_counter()
                                 _snippet = _rag_mod.retrieve_context(
-                                    _db_aug, _user["specialization_id"], _user_message, k=3
+                                    _db_aug, _user["specialization_id"], _user_message,
+                                    k=3, embedding=_embedding
                                 )
                                 _timing['rag'] = time.perf_counter() - _t_rag
                                 ilog("RAG", f"Retrieval: {_timing['rag']:.2f}s | chunks={'yes' if _snippet else 'none'}")
@@ -1347,7 +1363,10 @@ Seja direto, objetivo e conciso."""
                             _db_aug = _DBAug(_db_path)
                             try:
                                 _t_mem = time.perf_counter()
-                                _facts = _mem_mod.recall(_db_aug, _user_id, _user_message, limit=5)
+                                _facts = _mem_mod.recall(
+                                    _db_aug, _user_id, _user_message,
+                                    limit=5, embedding=_embedding
+                                )
                                 _timing['memory'] = time.perf_counter() - _t_mem
                                 ilog("MEMORY", f"Recall: {_timing['memory']:.2f}s | facts={'yes' if _facts else 'none'}")
                                 if _facts:

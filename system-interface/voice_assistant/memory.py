@@ -34,12 +34,18 @@ Responda APENAS com JSON válido, nenhum texto extra:
 {"event_type":"...", "extracted_value":...}"""
 
 
-def recall(db, user_id: int, query: str, limit: int = 5) -> Optional[str]:
-    """Semantic vec search across user_memories. Returns formatted bullet list or None."""
+def recall(db, user_id: int, query: str, limit: int = 5,
+           embedding: Optional[bytes] = None) -> Optional[str]:
+    """Semantic vec search across user_memories. Returns formatted bullet list or None.
+
+    Pass a pre-computed embedding to avoid a second Ollama call when the
+    caller already has one (e.g. from a parallel dispatcher + embed run).
+    """
     try:
         if not getattr(db, "vec_available", False):
             return None
-        embedding = rag.embed_query(query)
+        if embedding is None:
+            embedding = rag.embed_query(query)
         if embedding is None:
             return None
         rows = db.vector_search_memory(user_id, embedding, k=limit)

@@ -49,17 +49,22 @@ def embed_query(text: str) -> Optional[bytes]:
 
 
 def retrieve_context(db, corpus_id: int, query: str,
-                     k: int = 3, max_chars: int = 1500) -> Optional[str]:
+                     k: int = 3, max_chars: int = 1500,
+                     embedding: Optional[bytes] = None) -> Optional[str]:
     """Return a formatted snippet block, or None if unavailable / no hits.
 
     Never injects an empty block — if there are no results, returns None so
     the caller adds nothing to the system prompt.
+
+    Pass a pre-computed embedding to avoid a second Ollama call when the
+    caller already has one (e.g. from a parallel dispatcher + embed run).
     """
     try:
         if not getattr(db, "vec_available", False):
             return None
 
-        embedding = embed_query(query)
+        if embedding is None:
+            embedding = embed_query(query)
         if embedding is None:
             return None
 
