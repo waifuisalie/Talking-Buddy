@@ -70,6 +70,14 @@
                             <span id="specialization_display" class="btn-value">Selecione...</span>
                         </button>
                     </div>
+
+                    <div>
+                        <input type="hidden" id="memory_enabled" name="memory_enabled" value="0">
+                        <button type="button" class="btn btn-selection-trigger" id="memory-toggle-btn" onclick="toggleMemory()">
+                            <span class="btn-label">MEMORIA DA IA</span>
+                            <span id="memory_display" class="btn-value">DESATIVADA</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -170,6 +178,13 @@ window.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // ----- Memória -----
+    const tempMemory = sessionStorage.getItem('temp_memory_enabled');
+    const initialMemory = tempMemory !== null
+        ? tempMemory
+        : '{{ "1" if user and user.memory_enabled else "0" }}';
+    _setMemory(initialMemory);
+
     // ----- Especialização (RAG corpus) -----
     const specializationId = sessionStorage.getItem('specialization_id');
     const specializationDisplay = sessionStorage.getItem('specialization_display');
@@ -242,6 +257,7 @@ window.addEventListener('DOMContentLoaded', function() {
             sessionStorage.setItem('temp_language', document.getElementById('language').value);
             sessionStorage.setItem('temp_specialization_id', document.getElementById('specialization_id').value);
             sessionStorage.setItem('temp_specialization_display', document.getElementById('specialization_display').textContent);
+            sessionStorage.setItem('temp_memory_enabled', document.getElementById('memory_enabled').value);
             const rfidValue = document.getElementById('rfid').value;
             if (rfidValue) {
                 sessionStorage.setItem('temp_rfid', rfidValue);
@@ -254,6 +270,21 @@ window.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+function _setMemory(val) {
+    const inp = document.getElementById('memory_enabled');
+    const lbl = document.getElementById('memory_display');
+    const btn = document.getElementById('memory-toggle-btn');
+    const on = (String(val) === '1');
+    inp.value = on ? '1' : '0';
+    lbl.textContent = on ? 'ATIVADA' : 'DESATIVADA';
+    btn.classList.toggle('active', on);
+}
+
+function toggleMemory() {
+    const current = document.getElementById('memory_enabled').value;
+    _setMemory(current === '1' ? '0' : '1');
+}
 
 document.getElementById('userForm').addEventListener('submit', function(e) {
     e.preventDefault();
