@@ -8,12 +8,15 @@
 
     // ----- Static config -----
     const PAIR_MAP = {
-        'pt-en': { left: 'pt', right: 'en', leftFlag: 'PT', rightFlag: 'EN' },
-        'pt-es': { left: 'pt', right: 'es', leftFlag: 'PT', rightFlag: 'ES' },
-        'en-es': { left: 'en', right: 'es', leftFlag: 'EN', rightFlag: 'ES' }
+        'pt-en': { left: 'pt', right: 'en' },
+        'pt-es': { left: 'pt', right: 'es' },
+        'en-es': { left: 'en', right: 'es' }
     };
 
     const LANG_LABEL = { pt: 'PT', en: 'EN', es: 'ES' };
+
+    // Maps language code → ISO 3166-1 alpha-2 country code for flag icons
+    const LANG_TO_COUNTRY = { pt: 'br', en: 'us', es: 'es' };
 
     const LANG_TO_USER_LANG = {
         pt: 'pt-BR',
@@ -48,8 +51,16 @@
     }
 
     function flagOfSide(side) {
-        if (!state.pairCfg) return '?';
-        return side === 'left' ? state.pairCfg.leftFlag : state.pairCfg.rightFlag;
+        if (!state.pairCfg) return null;
+        return LANG_TO_COUNTRY[state.pairCfg[side]] || null;
+    }
+
+    function setFlagEl(el, lang) {
+        el.className = el.className.replace(/\bfi-\w+\b/g, '').trim();
+        el.classList.add('fi');
+        const country = LANG_TO_COUNTRY[lang];
+        if (country) el.classList.add('fi-' + country);
+        el.textContent = '';
     }
 
     // ============================================================
@@ -240,10 +251,14 @@
         if (!state.pairCfg) return;
         const lf = state.pairCfg.left;
         const rf = state.pairCfg.right;
-        els.flags.left.textContent = state.pairCfg.leftFlag;
-        els.flags.right.textContent = state.pairCfg.rightFlag;
+        setFlagEl(els.flags.left, lf);
+        setFlagEl(els.flags.right, rf);
         els.langLabels.left.textContent = LANG_LABEL[lf];
         els.langLabels.right.textContent = LANG_LABEL[rf];
+
+        // Send button labels — each panel uses its own language
+        els.sendBtns.left.textContent  = tInLang('buttons.send', lf) || 'ENVIAR';
+        els.sendBtns.right.textContent = tInLang('buttons.send', rf) || 'SEND';
 
         // Mic tooltips — use each panel's own language
         els.micBtns.left.title = tInLang(`translation.speak_${lf}`, lf) || `Speak ${LANG_LABEL[lf]}`;
@@ -265,8 +280,8 @@
             }
         });
 
-        // Update the pair chip label
-        const pretty = `${state.pairCfg.leftFlag} ${LANG_LABEL[lf]} ⇄ ${LANG_LABEL[rf]} ${state.pairCfg.rightFlag}`;
+        // Update the pair chip label (text only — flags shown in panel headers)
+        const pretty = `${LANG_LABEL[lf]} ⇄ ${LANG_LABEL[rf]}`;
         if (els.chipLabel) els.chipLabel.textContent = pretty;
     }
 
@@ -430,7 +445,12 @@
         // Render placeholder bubble on the listener's panel
         removeEmptyHint(listenerSide);
         const translationEl = makeBubble('', 'translation thinking');
-        translationEl.innerHTML = '<em>…</em>';
+        translationEl.innerHTML =
+            '<div class="tr-thinking-dots">' +
+            '<div class="tr-thinking-dot"></div>' +
+            '<div class="tr-thinking-dot"></div>' +
+            '<div class="tr-thinking-dot"></div>' +
+            '</div>';
         els.bubbles[listenerSide].appendChild(translationEl);
         scrollToBottom(listenerSide);
 

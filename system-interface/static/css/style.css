@@ -2098,15 +2098,24 @@ svg.battery-charging.hidden {
     color: var(--accent-color);
 }
 
+/* Flag icon base — self-hosted SVGs in static/flags/ */
+.fi {
+    display: inline-block;
+    width: 1.5em;
+    height: 1em;
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+    border-radius: 2px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+.fi-br { background-image: url(../flags/br.svg); }
+.fi-us { background-image: url(../flags/us.svg); }
+.fi-es { background-image: url(../flags/es.svg); }
+
 .translation-flag {
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    padding: 2px 7px;
-    border-radius: 10px;
-    background: rgba(0, 255, 0, 0.15);
-    border: 1px solid rgba(0, 255, 0, 0.4);
-    color: var(--accent-color);
+    /* sizing handled by .fi above when flag class is present */
 }
 
 .translation-lang-label {
@@ -2202,9 +2211,36 @@ svg.battery-charging.hidden {
     line-height: 1;
 }
 
-.tr-bubble.tr-bubble--thinking em {
-    opacity: 0.7;
-    font-style: italic;
+.tr-bubble.tr-bubble--thinking {
+    animation: tr-thinking-glow 1.4s ease-in-out infinite;
+}
+
+@keyframes tr-thinking-glow {
+    0%, 100% { border-color: rgba(0, 255, 0, 0.18); box-shadow: none; }
+    50%       { border-color: rgba(0, 255, 0, 0.55); box-shadow: 0 0 10px rgba(0, 255, 0, 0.25); }
+}
+
+.tr-thinking-dots {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    padding: 2px 2px;
+}
+
+.tr-thinking-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(0, 255, 0, 0.65);
+    animation: tr-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.tr-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.tr-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes tr-dot-bounce {
+    0%, 80%, 100% { transform: scale(0.55); opacity: 0.45; }
+    40%           { transform: scale(1.0);  opacity: 1.0; }
 }
 
 /* Per-panel input */
@@ -2327,7 +2363,9 @@ svg.battery-charging.hidden {
 
 .translation-pair-option .pair-flag-left,
 .translation-pair-option .pair-flag-right {
-    font-size: 1.5rem;
+    width: 2rem;
+    height: 1.35rem;
+    flex-shrink: 0;
 }
 
 .translation-pair-option .pair-arrow {
