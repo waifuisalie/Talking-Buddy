@@ -37,6 +37,78 @@ WAKE_WORD_DEBOUNCE_TIME=2.0
 
 Flow: wake word detected → chat opens, feedback sound plays, mic arms → VAD records until silence → Whisper transcribes → Ollama generates → Supertonic speaks.
 
+## AI Specializations (RAG)
+
+Specializations are shared knowledge bases (corpora) built from PDFs. Each corpus is created once by an admin and can then be assigned to any user account. When a user with a specialization asks a knowledge question, the assistant retrieves relevant passages from that corpus before generating its answer.
+
+All management is done via the `ingest.py` CLI. Run every command from the `system-interface/` directory. **Ollama must be running** (`bash start.sh` or `systemctl --user start ollama`) for PDF ingestion, because each text chunk is sent to the embedding model (`granite-embedding:278m`).
+
+### Typical workflow
+
+1. **Create a corpus** — assign a slug (identifier) and a display name
+2. **Ingest PDFs** — text is extracted, chunked (~500 tokens, 80-token overlap), and embedded
+3. **Assign to a user** — in the web UI, edit the user account and pick the specialization
+
+### Corpus management
+
+```bash
+# Create a new specialization
+python -m voice_assistant.ingest corpus create \
+    --slug medicina \
+    --name "Medicina Geral" \
+    --description "Conteúdo de medicina para a equipe de enfermagem" \
+    --language pt-BR
+
+# List all specializations (shows ID, slug, name, doc/chunk counts, language, enabled status)
+python -m voice_assistant.ingest corpus list
+
+# Delete a specialization
+# WARNING: irreversible — removes all documents, chunks, vector embeddings, and PDF files on disk
+python -m voice_assistant.ingest corpus delete --slug medicina
+```
+
+`corpus create` options:
+
+| Option | Required | Default | Notes |
+|--------|----------|---------|-------|
+| `--slug` | yes | — | Short identifier, no spaces (e.g. `medicina`, `direito`) |
+| `--name` | yes | — | Display name shown in the web UI |
+| `--description` | no | `""` | Optional free-text description |
+| `--language` | no | `pt-BR` | Metadata only — does not change embedding behavior |
+
+### Document management
+
+```bash
+# Ingest a PDF into a corpus (Ollama must be running)
+python -m voice_assistant.ingest doc add \
+    --corpus medicina \
+    --pdf /path/to/manual_clinico.pdf
+
+# List documents in a corpus (shows ID, filename, page count, chunk count, ingest date)
+python -m voice_assistant.ingest doc list --corpus medicina
+
+# Remove a single document (use the ID shown by doc list)
+python -m voice_assistant.ingest doc delete --doc-id 3
+```
+
+`doc add` runs 5 steps and prints progress: SHA-256 check → copy to `data/rag/corpora/<slug>/` → extract text → chunk → embed via Ollama. Large PDFs can take several minutes; each chunk is a separate Ollama HTTP call.
+
+### Important notes
+
+- **PDFs must have a text layer.** Scanned images (no OCR) produce no text and the ingest aborts.
+- **Duplicate detection.** Re-ingesting the same file (same SHA-256) is a no-op — safe to re-run.
+- **`corpus delete` is irreversible** and cascades: DB rows + the `data/rag/corpora/<slug>/` directory on disk are both removed.
+- Users assigned to a deleted corpus keep their `specialization_id` in the DB, but RAG is silently skipped at chat time (the corpus no longer exists). Edit the user account to clear the assignment.
+- The dispatcher (gemma3:1b) classifies each message before RAG runs. Only messages classified as `RAG` trigger a vector search; chitchat goes straight to the LLM.
+
+### Memory embedding backfill
+
+If user memories are missing their vector entry (e.g. after a DB migration), regenerate embeddings with:
+
+```bash
+python -m voice_assistant.ingest memory backfill
+```
+
 ## Layout
 
 ```
