@@ -25,12 +25,31 @@ const i18n = (function() {
                 mic: 'Gravar mensagem de voz',
                 send: 'ENVIAR'
             },
-            
+
             // Labels
             labels: {
                 logged_in: 'Logado'
             },
-            
+
+            // Translation mode (Phase 9)
+            translation: {
+                mode_on: 'Tradução',
+                mode_off: 'Tradução',
+                pick_pair_title: 'Escolha o par de idiomas',
+                pair_pt_en: 'Português ⇄ English',
+                pair_pt_es: 'Português ⇄ Español',
+                pair_en_es: 'English ⇄ Español',
+                panel_idle: 'Toque o microfone para falar',
+                retry_hint: 'Toque para refazer',
+                tap_to_pick_pair: 'Toque para escolher o par',
+                speak_pt: 'Falar (PT)',
+                speak_en: 'Speak (EN)',
+                speak_es: 'Hablar (ES)',
+                type_pt: 'Digite em português...',
+                type_en: 'Type in English...',
+                type_es: 'Escribe en español...'
+            },
+
             // Placeholders
             placeholders: {
                 type_message: 'Digite sua mensagem...',
@@ -76,12 +95,31 @@ const i18n = (function() {
                 mic: 'Record voice message',
                 send: 'SEND'
             },
-            
+
             // Labels
             labels: {
                 logged_in: 'Logged in'
             },
-            
+
+            // Translation mode (Phase 9)
+            translation: {
+                mode_on: 'Translate',
+                mode_off: 'Translate',
+                pick_pair_title: 'Pick a language pair',
+                pair_pt_en: 'Português ⇄ English',
+                pair_pt_es: 'Português ⇄ Español',
+                pair_en_es: 'English ⇄ Español',
+                panel_idle: 'Tap the mic to speak',
+                retry_hint: 'Tap to retry',
+                tap_to_pick_pair: 'Tap to pick a pair',
+                speak_pt: 'Falar (PT)',
+                speak_en: 'Speak (EN)',
+                speak_es: 'Hablar (ES)',
+                type_pt: 'Digite em português...',
+                type_en: 'Type in English...',
+                type_es: 'Escribe en español...'
+            },
+
             // Placeholders
             placeholders: {
                 type_message: 'Type your message...',
@@ -127,12 +165,31 @@ const i18n = (function() {
                 mic: 'Grabar mensaje de voz',
                 send: 'ENVIAR'
             },
-            
+
             // Labels
             labels: {
                 logged_in: 'Conectado'
             },
-            
+
+            // Translation mode (Phase 9)
+            translation: {
+                mode_on: 'Traducir',
+                mode_off: 'Traducir',
+                pick_pair_title: 'Elige el par de idiomas',
+                pair_pt_en: 'Português ⇄ English',
+                pair_pt_es: 'Português ⇄ Español',
+                pair_en_es: 'English ⇄ Español',
+                panel_idle: 'Toca el micrófono para hablar',
+                retry_hint: 'Toca para reintentar',
+                tap_to_pick_pair: 'Toca para elegir el par',
+                speak_pt: 'Falar (PT)',
+                speak_en: 'Speak (EN)',
+                speak_es: 'Hablar (ES)',
+                type_pt: 'Digite em português...',
+                type_en: 'Type in English...',
+                type_es: 'Escribe en español...'
+            },
+
             // Placeholders
             placeholders: {
                 type_message: 'Escribe tu mensaje...',

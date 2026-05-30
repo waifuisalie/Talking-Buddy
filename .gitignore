@@ -15,6 +15,13 @@ ENV/
 conversation.json
 .voice_chatbot/
 
+# RAG runtime data (ingested PDFs, per-corpus directories)
+system-interface/data/rag/
+
+# DB backups created during migrations
+system-interface/assistant.db.bak-*
+system-interface/assistant.db.pre-rag-bak
+
 # Temporary Files
 *.wav
 *.tmp

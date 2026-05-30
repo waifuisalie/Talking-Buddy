@@ -25,6 +25,7 @@
                                        {% elif user.language == 'en-US' %}Inglês (EUA)
                                        {% elif user.language == 'es-ES' %}Espanhol (Espanha)
                                        {% else %}{{ user.language }}{% endif %}</span>
+                        <span>Especialização: {% if user.specialization_id and spec_names.get(user.specialization_id) %}{{ spec_names[user.specialization_id] }}{% else %}Nenhuma{% endif %}</span>
                     </div>
                 </div>
                 <div class="user-actions">

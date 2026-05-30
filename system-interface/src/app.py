@@ -652,7 +652,9 @@ def menu_usuarios():
 def lista_usuarios():
     """Lista todos os usuários"""
     usuarios = get_db().list_users()
-    return render_template('lista_usuarios.html', users=usuarios)
+    corpora = get_db().list_corpora(only_enabled=False)
+    spec_names = {c['id']: c['display_name'] for c in corpora}
+    return render_template('lista_usuarios.html', users=usuarios, spec_names=spec_names)
 
 
 @app.route('/usuarios/aguardar-rfid')
@@ -882,6 +884,45 @@ def selecionar_language():
     return render_template('selecionar_language.html')
 
 
+@app.route('/usuarios/selecionar-especializacao')
+@login_required
+def selecionar_especializacao():
+    """Tela de seleção de especialização (RAG corpus)"""
+    return render_template('selecionar_specialization.html')
+
+
+@app.route('/api/specializations', methods=['GET'])
+@login_required
+def api_specializations():
+    """Lista os corpora habilitados para popular o seletor de especialização."""
+    rows = get_db().list_corpora(only_enabled=True)
+    return jsonify([
+        {
+            'id': r['id'],
+            'slug': r['slug'],
+            'display_name': r['display_name'],
+            'description': r['description'] or '',
+            'language': r['language'] or '',
+            'document_count': r['document_count'],
+            'chunk_count': r['chunk_count'],
+        }
+        for r in rows
+    ])
+
+
+def _parse_specialization_id(raw):
+    """Aceita None, '', 'null', ou string numérica; retorna int ou None."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.lower() in ('null', 'none', '0'):
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
 @app.route('/usuarios/novo', methods=['GET', 'POST'])
 @login_required
 def novo_usuario():
@@ -894,33 +935,37 @@ def novo_usuario():
             response_style = data.get('response_style', '').strip()
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
-            
-            # Validação
+            specialization_id = _parse_specialization_id(data.get('specialization_id'))
+            memory_enabled = 1 if str(data.get('memory_enabled', '0')) == '1' else 0
+
+            # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
                 return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
-            
+
             # Verifica se nome já existe
             if get_db().user_exists_by_name(name):
                 return jsonify({'success': False, 'message': 'Já existe um usuário com este nome!'})
-            
+
             # Verifica se RFID já existe
             if get_db().user_exists_by_rfid(rfid):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado!'})
-            
+
             # Adiciona usuário
-            get_db().add_user(name, rfid, response_style, persona_gender, language)
+            get_db().add_user(name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled)
             return jsonify({'success': True, 'message': 'Usuário cadastrado com sucesso!', 'redirect': '/usuarios/lista'})
-        
+
         except Exception as e:
             error_msg = str(e)
             if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado'})
             return jsonify({'success': False, 'message': f'Erro ao cadastrar: {error_msg}'})
-    
-    return render_template('form_usuario.html', user=None, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+
+    corpora = get_db().list_corpora(only_enabled=True)
+    return render_template('form_usuario.html', user=None,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         corpora=corpora)
 
 
 @app.route('/usuarios/editar/<int:user_id>', methods=['GET', 'POST'])
@@ -930,7 +975,7 @@ def editar_usuario(user_id):
     usuario = get_db().get_user(user_id)
     if not usuario:
         return redirect(url_for('lista_usuarios'))
-    
+
     if request.method == 'POST':
         try:
             data = request.get_json()
@@ -939,33 +984,37 @@ def editar_usuario(user_id):
             response_style = data.get('response_style', '').strip()
             persona_gender = data.get('persona_gender', '').strip()
             language = data.get('language', '').strip()
-            
-            # Validação
+            specialization_id = _parse_specialization_id(data.get('specialization_id'))
+            memory_enabled = 1 if str(data.get('memory_enabled', '0')) == '1' else 0
+
+            # Validação (specialization é OPCIONAL — None = "Nenhuma")
             if not name or not rfid or not response_style or not persona_gender or not language:
                 return jsonify({'success': False, 'message': 'Todos os campos são obrigatórios!'})
-            
+
             # Verifica se nome já existe (excluindo o próprio usuário)
             if get_db().user_exists_by_name(name, exclude_id=user_id):
                 return jsonify({'success': False, 'message': 'Já existe outro usuário com este nome!'})
-            
+
             # Verifica se RFID já existe (excluindo o próprio usuário)
             if get_db().user_exists_by_rfid(rfid, exclude_id=user_id):
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário!'})
-            
+
             # Atualiza
-            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language)
+            get_db().update_user(user_id, name, rfid, response_style, persona_gender, language, specialization_id, memory_enabled)
             return jsonify({'success': True, 'message': 'Usuário atualizado com sucesso!', 'redirect': '/usuarios/lista'})
-        
+
         except Exception as e:
             error_msg = str(e)
             if 'UNIQUE' in error_msg and 'rfid' in error_msg.lower():
                 return jsonify({'success': False, 'message': 'Este RFID já está cadastrado para outro usuário'})
             return jsonify({'success': False, 'message': f'Erro ao atualizar: {error_msg}'})
-    
-    return render_template('form_usuario.html', user=usuario, 
-                         response_styles=RESPONSE_STYLES, 
-                         genders=GENDERS, 
-                         languages=LANGUAGES)
+
+    corpora = get_db().list_corpora(only_enabled=True)
+    return render_template('form_usuario.html', user=usuario,
+                         response_styles=RESPONSE_STYLES,
+                         genders=GENDERS,
+                         languages=LANGUAGES,
+                         corpora=corpora)
 
 
 @app.route('/usuarios/confirmar-remocao/<int:user_id>', methods=['GET'])
@@ -1040,13 +1089,37 @@ def api_chat_send():
         user_message = data.get('message', '').strip()
         rfid = data.get('rfid', '')
 
+        # Phase 9 — Translation mode parameters (all optional)
+        mode = (data.get('mode') or 'chat').strip().lower()
+        source_lang = (data.get('source_lang') or '').strip().lower()
+        target_lang = (data.get('target_lang') or '').strip().lower()
+        last_turn = data.get('last_turn')
+        is_translation = (mode == 'translation')
+
         if not user_message:
             return jsonify({'success': False, 'error': 'Mensagem vazia'}), 400
 
-        # --- Resolve user & context (same logic as before) ---
-        is_anonymous = (not rfid or rfid == 'anonymous')
+        if is_translation:
+            _VALID_LANGS = {'pt', 'en', 'es'}
+            if source_lang not in _VALID_LANGS or target_lang not in _VALID_LANGS:
+                return jsonify({'success': False,
+                                'error': 'source_lang/target_lang must be pt|en|es'}), 400
+            if source_lang == target_lang:
+                return jsonify({'success': False,
+                                'error': 'source_lang and target_lang must differ'}), 400
 
-        if is_anonymous:
+        # --- Resolve user & context (same logic as before) ---
+        # Translation mode is always treated as anonymous: no DB writes,
+        # no personality, no memory, no RAG.
+        is_anonymous = is_translation or (not rfid or rfid == 'anonymous')
+
+        if is_translation:
+            print(f"🌐 [API] Modo tradução: {source_lang} → {target_lang}")
+            user = None
+            user_id = None
+            conversation_context = []
+            system_prompt = _build_translation_prompt(source_lang, target_lang, last_turn)
+        elif is_anonymous:
             print(f"🤖 [API] Modo anônimo ativado")
             user = None
             user_id = None
@@ -1080,8 +1153,13 @@ Seja direto, objetivo e conciso."""
         # Per-request TTS parameters (no shared-state mutation)
         _LANG_MAP = {"pt-BR": "pt", "en-US": "en", "es-ES": "es"}
         _tts_personality = personality_id
-        _tts_language = _LANG_MAP.get(user["language"], "pt") if user else "pt"
-        _tts_gender = user["persona_gender"] if user else "male"
+        if is_translation:
+            # Speak in the listener's language; voice is neutral male.
+            _tts_language = target_lang
+            _tts_gender = "male"
+        else:
+            _tts_language = _LANG_MAP.get(user["language"], "pt") if user else "pt"
+            _tts_gender = user["persona_gender"] if user else "male"
 
         user_name = user["name"] if user else "anonymous"
         print(f"🎤 [TTS-WIRE] User='{user_name}' | personality='{_tts_personality}' | gender='{_tts_gender}' | language='{_tts_language}'")
@@ -1105,12 +1183,18 @@ Seja direto, objetivo e conciso."""
         _user = dict(user) if user else None
         _user_id = user_id
         _is_anonymous = is_anonymous
+        _is_translation = is_translation
+        _source_lang = source_lang if is_translation else None
+        _target_lang = target_lang if is_translation else None
         _db_path = DB_PATH
         _ollama_model = ollama_model
 
         def streaming_pipeline():
+            nonlocal _system_prompt
             try:
                 user_name = _user['name'] if _user else 'Visitante'
+                _pipeline_t0 = time.perf_counter()
+                _timing = {}  # keyed by stage name, value = elapsed seconds
                 print(f"🤖 [SSE] Streaming resposta para {user_name}...")
 
                 # Set up audio queue
@@ -1162,6 +1246,10 @@ Seja direto, objetivo e conciso."""
                         sentence = tts_sentence_queue.get()
                         if sentence is None:  # sentinel — stop worker
                             break
+                        # If the client cancelled, skip synthesis but keep
+                        # draining the queue so the producer can exit cleanly.
+                        if sse_manager.is_cancelled(session_id):
+                            continue
                         try:
                             _tts_sentence_counter[0] += 1
                             _idx = _tts_sentence_counter[0]
@@ -1173,6 +1261,8 @@ Seja direto, objetivo e conciso."""
                                 gender=_tts_gender,
                             )
                             synth_time = time.perf_counter() - _t0
+                            if _idx == 1:
+                                _timing['tts_s1'] = synth_time
                             audio_dur = _wav_duration(audio_file) if audio_file else 0.0
                             rtf = synth_time / audio_dur if audio_dur > 0 else 0.0
                             ilog("TTS", f"Frase {_idx}: {synth_time:.2f}s | RTF={rtf:.3f} | \"{sentence[:50]}\"")
@@ -1192,13 +1282,118 @@ Seja direto, objetivo e conciso."""
                 # override the system prompt instruction — placing the reminder in the
                 # user message itself keeps it in the immediate context where it has
                 # much stronger weight.
-                _LANGUAGE_REMINDERS = {
-                    'pt': '[Responda sempre em português brasileiro]',
-                    'en': '[Always respond in English, no matter what language I write in]',
-                    'es': '[Responde siempre en español, sin importar el idioma que use]',
-                }
-                _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
-                _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
+                # In translation mode we wrap the message with the strict
+                # "translate, don't answer" template — Gemma3:1b honors directives
+                # in the user message far more reliably than in the system prompt
+                # tail (proven during Phase 8 with the no-invent guard).
+                if _is_translation:
+                    _prompted_message = _format_translation_user_message(
+                        _user_message, _source_lang, _target_lang
+                    )
+                else:
+                    _LANGUAGE_REMINDERS = {
+                        'pt': '[Responda sempre em português brasileiro]',
+                        'en': '[Always respond in English, no matter what language I write in]',
+                        'es': '[Responde siempre en español, sin importar el idioma que use]',
+                    }
+                    _reminder = _LANGUAGE_REMINDERS.get(_tts_language, '')
+                    _prompted_message = f"{_user_message}\n{_reminder}" if _reminder else _user_message
+
+                # Dispatcher: classify intent and augment system prompt.
+                # Only runs when the user has at least one feature that needs it:
+                # specialization (RAG) or memory. Pure chitchat users skip this
+                # entirely, saving the ~80-200ms Ollama classifier call.
+                # Translation mode also bypasses it unconditionally.
+                _has_rag    = bool(_user and _user.get("specialization_id"))
+                _has_memory = bool(_user and _user.get("memory_enabled", 1))
+                _intent = "CHITCHAT"
+                if not _is_translation and (_has_rag or _has_memory):
+                    try:
+                        import concurrent.futures as _cf
+                        from voice_assistant import dispatcher as _disp
+                        from voice_assistant import rag as _rag_mod
+                        from voice_assistant import memory as _mem_mod
+
+                        # Run classifier and query embedding in parallel — they are
+                        # independent and both make Ollama HTTP calls. The embedding
+                        # result is passed directly to whichever branch wins, so we
+                        # never embed the same query twice.
+                        _t_parallel = time.perf_counter()
+                        with _cf.ThreadPoolExecutor(max_workers=2) as _ex:
+                            _f_intent = _ex.submit(
+                                _disp.classify, _user_message, _tts_language
+                            )
+                            _f_embed = _ex.submit(_rag_mod.embed_query, _user_message)
+
+                        _intent    = _f_intent.result()
+                        _embedding = _f_embed.result()   # bytes or None
+                        _timing['dispatcher'] = time.perf_counter() - _t_parallel
+                        ilog("DISPATCH", f"Parallel dispatch+embed: {_timing['dispatcher']:.2f}s")
+
+                        # Safety net: questions don't store facts. Bridges the common
+                        # dispatcher mis-classification where "tomei meu remédio hoje?"
+                        # is labeled FACT_STORE and pollutes user_memories with the
+                        # question itself + a hallucinated extracted_value.
+                        if _intent == "FACT_STORE" and _user_message.rstrip().endswith("?"):
+                            ilog("DISPATCH", "FACT_STORE on a question → reclassified as FACT_RECALL")
+                            _intent = "FACT_RECALL"
+                        ilog("DISPATCH", f"Intent: {_intent}")
+
+                        if _intent == "RAG" and not _is_anonymous and _user and _user.get("specialization_id"):
+                            from database import Database as _DBAug
+                            _db_aug = _DBAug(_db_path)
+                            try:
+                                _t_rag = time.perf_counter()
+                                _snippet = _rag_mod.retrieve_context(
+                                    _db_aug, _user["specialization_id"], _user_message,
+                                    k=3, embedding=_embedding
+                                )
+                                _timing['rag'] = time.perf_counter() - _t_rag
+                                ilog("RAG", f"Retrieval: {_timing['rag']:.2f}s | chunks={'yes' if _snippet else 'none'}")
+                                if _snippet:
+                                    _system_prompt += (
+                                        "\n\n[Contexto relevante da especialização do assistente"
+                                        " — cite quando responder]:\n" + _snippet
+                                    )
+                            finally:
+                                _db_aug.close()
+
+                        elif _intent == "FACT_RECALL" and not _is_anonymous and _user_id:
+                            from database import Database as _DBAug
+                            _db_aug = _DBAug(_db_path)
+                            try:
+                                _t_mem = time.perf_counter()
+                                _facts = _mem_mod.recall(
+                                    _db_aug, _user_id, _user_message,
+                                    limit=5, embedding=_embedding
+                                )
+                                _timing['memory'] = time.perf_counter() - _t_mem
+                                ilog("MEMORY", f"Recall: {_timing['memory']:.2f}s | facts={'yes' if _facts else 'none'}")
+                                if _facts:
+                                    _system_prompt += (
+                                        "\n\n[Fatos pessoais relevantes do usuário]:\n" + _facts
+                                    )
+                                else:
+                                    _prompted_message += (
+                                        "\n[Sistema: não há nenhum registro pessoal relacionado a "
+                                        "esta pergunta. Responda dizendo que você não tem essa "
+                                        "informação registrada. NÃO invente nem suponha fatos.]"
+                                    )
+                            finally:
+                                _db_aug.close()
+                    except Exception as _dispatch_err:
+                        print(f"[DISPATCH] non-fatal: {_dispatch_err}")
+
+                # Pre-LLM timing summary
+                _pre_llm = time.perf_counter() - _pipeline_t0
+                _timing['pre_llm'] = _pre_llm
+                _disp_s  = f"{_timing['dispatcher']:.2f}s" if 'dispatcher' in _timing else "skipped"
+                _rag_s   = f"{_timing['rag']:.2f}s"        if 'rag'        in _timing else "skipped"
+                _mem_s   = f"{_timing['memory']:.2f}s"     if 'memory'     in _timing else "skipped"
+                ilog("TIMING", (
+                    f"Pre-LLM: {_pre_llm:.2f}s total  |  "
+                    f"dispatcher={_disp_s}  rag={_rag_s}  memory={_mem_s}"
+                ))
 
                 # Stream from Ollama — no longer blocked by TTS synthesis
                 user_name = _user['name'] if _user else 'Visitante'
@@ -1212,6 +1407,12 @@ Seja direto, objetivo e conciso."""
                     conversation_context=_conversation_context,
                     model=_ollama_model
                 ):
+                    # Client cancelled (e.g. user tapped retry on the last bubble).
+                    # Break out of the LLM loop within one token of latency.
+                    if sse_manager.is_cancelled(session_id):
+                        ilog("LLM", "Cancelled by client — aborting stream")
+                        break
+
                     if not chunk:
                         continue
 
@@ -1230,6 +1431,8 @@ Seja direto, objetivo e conciso."""
                         tts_sentence_queue.put(sentence)
 
                 _llm_total = time.perf_counter() - _llm_t0
+                _timing['llm_ttft']  = _llm_ttft or 0.0
+                _timing['llm_total'] = _llm_total
                 ilog("LLM", f"Concluído: {_llm_total:.2f}s | {len(full_response)} chars")
 
                 # Flush remaining text into TTS worker
@@ -1241,12 +1444,36 @@ Seja direto, objetivo e conciso."""
                 tts_sentence_queue.put(None)
                 tts_thread.join()
 
+                _turn_total = time.perf_counter() - _pipeline_t0
+                ilog("TIMING", (
+                    f"── Turn complete: {_turn_total:.2f}s ──  "
+                    f"pre-LLM={_timing.get('pre_llm',0):.2f}s  "
+                    f"LLM-TTFT={_timing.get('llm_ttft',0):.2f}s  "
+                    f"LLM-gen={_timing.get('llm_total',0):.2f}s  "
+                    f"TTS-s1={_timing.get('tts_s1',0):.2f}s"
+                ))
+
                 # Signal generation complete
                 if audio_player and audio_player.is_available():
                     audio_player.signal_generation_complete()
                 else:
                     # No audio player — send response_done immediately
                     sse_manager.push_event(session_id, 'response_done', {})
+
+                # Async FACT_STORE: extract and persist personal fact post-stream
+                if _intent == "FACT_STORE" and not _is_anonymous and _user_id:
+                    _msg_snap = _user_message
+                    _uid_snap = _user_id
+                    def _extract_async():
+                        try:
+                            from database import Database as _DBAsync
+                            from voice_assistant import memory as _mem_async
+                            _db_x = _DBAsync(_db_path)
+                            _mem_async.extract_and_store(_db_x, _uid_snap, _msg_snap, ollama_client)
+                            _db_x.close()
+                        except Exception as _ex:
+                            print(f"[MEMORY] extract failed (non-fatal): {_ex}")
+                    threading.Thread(target=_extract_async, daemon=True, name="MemExtract").start()
 
                 # Save assistant response to DB
                 if not _is_anonymous and _user_id:
@@ -1297,6 +1524,40 @@ def api_chat_stream(session_id):
             'X-Accel-Buffering': 'no'
         }
     )
+
+
+@app.route('/api/chat/cancel', methods=['POST'])
+def api_chat_cancel():
+    """Cancel an in-flight chat session.
+
+    Used by translation-mode retry: the client taps the last bubble, we mark
+    the SSE session cancelled so the LLM/TTS loops break out, and we drain
+    the audio queue so any in-flight playback stops mid-sentence.
+
+    Request JSON:  { "session_id": "uuid" }
+    Response JSON: { "success": true, "cancelled": <bool> }
+    """
+    try:
+        data = request.get_json() or {}
+        sid = (data.get('session_id') or '').strip()
+        if not sid:
+            return jsonify({'success': False, 'error': 'session_id required'}), 400
+
+        found = sse_manager.mark_cancelled(sid)
+
+        # Stop any audio already queued / playing on the Pi speaker.
+        if audio_player and audio_player.is_available():
+            try:
+                audio_player.stop_queue_playback(clear_queue=True)
+            except Exception as e:
+                print(f"⚠️  [CANCEL] audio_player.stop_queue_playback error: {e}")
+
+        if found:
+            print(f"🛑 [CANCEL] session {sid[:8]}… cancelled")
+        return jsonify({'success': True, 'cancelled': found})
+    except Exception as e:
+        print(f"❌ [CANCEL] {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/chat/send_sync', methods=['POST'])
@@ -1838,6 +2099,69 @@ def _resolve_personality_for_user(user) -> str:
     return RESPONSE_STYLE_TO_PERSONALITY.get(
         user['response_style'] if user else 'neutral (balanced)',
         'neutral'
+    )
+
+
+_TRANSLATION_LANG_NAMES = {"pt": "Portuguese", "en": "English", "es": "Spanish"}
+
+
+def _build_translation_prompt(source_lang: str, target_lang: str,
+                              last_turn=None) -> str:
+    """System prompt for translation mode (Phase 9).
+
+    Gemma3:1b is small and falls back to chat-completion behavior when the
+    system prompt is loose. We keep this prompt extremely strict — explicit
+    rule numbering helps; the "tell me a joke" example pins the model's
+    most common failure mode (answering the message instead of translating
+    it). `last_turn`, when provided, is a one-utterance disambiguation
+    cue, never to be translated or echoed.
+    """
+    src = _TRANSLATION_LANG_NAMES.get(source_lang, source_lang)
+    tgt = _TRANSLATION_LANG_NAMES.get(target_lang, target_lang)
+    base = (
+        f"You are a strict translation engine. You translate text from "
+        f"{src} to {tgt}. You NEVER do anything else.\n\n"
+        f"RULES (absolute, never break):\n"
+        f"1. You translate ONLY. If the input is a question, you produce "
+        f"the {tgt} version of the question. If the input is a request "
+        f"('tell me a joke'), you produce the {tgt} request — you do NOT "
+        f"answer or fulfill it.\n"
+        f"2. Output ONLY the {tgt} translation. No quotes, no labels, "
+        f"no commentary, no preamble like 'Translation:' or 'Here is'.\n"
+        f"3. Preserve meaning, tone, and naturalness. Do not translate "
+        f"word-for-word; do not add or remove information.\n"
+        f"4. If the input is already in {tgt}, output it unchanged."
+    )
+    if last_turn:
+        # Escape embedded quotes lightly
+        clean = str(last_turn).replace('"', "'").strip()
+        if clean:
+            base += (
+                f"\n\nContext (DO NOT translate, DO NOT echo — use only to "
+                f"resolve pronouns or short replies): the user's reply "
+                f"refers to: \"{clean}\""
+            )
+    return base
+
+
+def _format_translation_user_message(user_message: str,
+                                     source_lang: str,
+                                     target_lang: str) -> str:
+    """Wrap the user message for translation mode.
+
+    Small models attend much more strongly to instructions placed in the
+    user message itself than to system-prompt tails. The trailing
+    `{target}:` marker also primes the model to complete with a
+    translation rather than a chat reply.
+    """
+    src = _TRANSLATION_LANG_NAMES.get(source_lang, source_lang)
+    tgt = _TRANSLATION_LANG_NAMES.get(target_lang, target_lang)
+    return (
+        f"Translate the following {src} sentence into {tgt}. "
+        f"Do NOT answer it, do NOT respond to it, do NOT add anything. "
+        f"Output ONLY the {tgt} translation.\n\n"
+        f"{src}: {user_message}\n"
+        f"{tgt}:"
     )
 
 

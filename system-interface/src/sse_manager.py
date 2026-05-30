@@ -21,6 +21,7 @@ class SSEManager:
         """
         self._sessions: Dict[str, queue.Queue] = {}
         self._session_times: Dict[str, float] = {}
+        self._cancelled: Dict[str, bool] = {}
         self._lock = threading.Lock()
         self._session_timeout = session_timeout
 
@@ -30,7 +31,20 @@ class SSEManager:
         with self._lock:
             self._sessions[session_id] = queue.Queue()
             self._session_times[session_id] = time.time()
+            self._cancelled[session_id] = False
         return session_id
+
+    def mark_cancelled(self, session_id: str) -> bool:
+        """Flag a session as cancelled. Returns True if the session existed."""
+        with self._lock:
+            if session_id in self._sessions:
+                self._cancelled[session_id] = True
+                return True
+            return False
+
+    def is_cancelled(self, session_id: str) -> bool:
+        """Cheap check used inside the streaming loop to abort mid-stream."""
+        return self._cancelled.get(session_id, False)
 
     def push_event(self, session_id: str, event_type: str, data: dict):
         """
@@ -91,6 +105,7 @@ class SSEManager:
         with self._lock:
             self._sessions.pop(session_id, None)
             self._session_times.pop(session_id, None)
+            self._cancelled.pop(session_id, None)
 
     def cleanup_stale_sessions(self):
         """Remove sessions older than timeout"""
@@ -103,6 +118,7 @@ class SSEManager:
             for sid in stale:
                 self._sessions.pop(sid, None)
                 self._session_times.pop(sid, None)
+                self._cancelled.pop(sid, None)
             if stale:
                 print(f"🧹 [SSE] Cleaned up {len(stale)} stale sessions")
 

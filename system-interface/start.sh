@@ -110,6 +110,27 @@ else
     echo -e "   Resposta: $(echo "$WARMUP_RESPONSE" | head -c 120)"
 fi
 
+# Aquecimento do modelo de embedding (RAG + memória semântica).
+# keep_alive=-1 instrui o Ollama a manter o modelo residente até desligar.
+EMBED_WARMUP_MODEL="${EMBED_MODEL:-granite-embedding:278m}"
+echo "🔄 Aquecendo embedding ($EMBED_WARMUP_MODEL, keep_alive=-1)..."
+EMBED_WARMUP_START=$SECONDS
+EMBED_WARMUP_RESPONSE=$(curl -s --max-time 60 http://127.0.0.1:11434/api/embed \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"model\": \"$EMBED_WARMUP_MODEL\",
+        \"input\": \"aquecimento\",
+        \"keep_alive\": -1
+    }" 2>/dev/null)
+EMBED_WARMUP_SECS=$(( SECONDS - EMBED_WARMUP_START ))
+
+if echo "$EMBED_WARMUP_RESPONSE" | grep -q '"embeddings"'; then
+    echo -e "${GREEN}✓${NC} Embedding aquecido em ${EMBED_WARMUP_SECS}s — $EMBED_WARMUP_MODEL na RAM"
+else
+    echo -e "${YELLOW}⚠️  Aquecimento do embedding falhou (${EMBED_WARMUP_SECS}s) — primeiro FACT_RECALL/RAG pode ser lento${NC}"
+    echo -e "   Resposta: $(echo "$EMBED_WARMUP_RESPONSE" | head -c 120)"
+fi
+
 # ============================================================================
 # 3. VERIFICAR AMBIENTE PYTHON
 # ============================================================================

@@ -661,8 +661,8 @@ class WhisperSTT:
             _reader_thread.start()
             _rlog("reader_thread_started")
 
-            # Discard first ~100ms to flush stale ALSA buffer contents.
-            discard_chunks = int(0.1 * sample_rate / chunk_size)
+            # Discard first ~150ms to flush stale ALSA buffer contents.
+            discard_chunks = int(0.15 * sample_rate / chunk_size)
             _rlog(f"discard_start chunks={discard_chunks}")
             for i in range(discard_chunks):
                 try:
